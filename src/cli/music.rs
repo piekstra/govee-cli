@@ -20,13 +20,20 @@ pub enum MusicCommand {
         device: String,
         /// Music mode name (case-insensitive, partial match supported)
         mode: String,
+        /// Sensitivity (0-100, default: 50)
+        #[arg(short, long, default_value = "50")]
+        sensitivity: u8,
     },
 }
 
 pub async fn handle(cmd: &MusicCommand, config: &RuntimeConfig) -> Result<(), AppError> {
     match cmd {
         MusicCommand::List { device } => handle_list(device, config).await,
-        MusicCommand::Set { device, mode } => handle_set(device, mode, config).await,
+        MusicCommand::Set {
+            device,
+            mode,
+            sensitivity,
+        } => handle_set(device, mode, *sensitivity, config).await,
     }
 }
 
@@ -38,13 +45,22 @@ fn extract_music_modes(
         if cap.capability_type == "devices.capabilities.music_setting"
             && cap.instance == "musicMode"
         {
-            if let Some(options) = cap.parameters.get("options").and_then(|v| v.as_array()) {
-                for option in options {
-                    if let Some(name) = option.get("name").and_then(|n| n.as_str()) {
-                        modes.push(json!({
-                            "name": name,
-                            "value": option.get("value"),
-                        }));
+            // Music mode uses STRUCT parameters with fields, not top-level options.
+            // The mode enum is in the field named "musicMode".
+            if let Some(fields) = cap.parameters.get("fields").and_then(|v| v.as_array()) {
+                for field in fields {
+                    let field_name = field.get("fieldName").and_then(|v| v.as_str());
+                    if field_name == Some("musicMode") {
+                        if let Some(options) = field.get("options").and_then(|v| v.as_array()) {
+                            for option in options {
+                                if let Some(name) = option.get("name").and_then(|n| n.as_str()) {
+                                    modes.push(json!({
+                                        "name": name,
+                                        "value": option.get("value"),
+                                    }));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -73,7 +89,12 @@ async fn handle_list(device: &str, config: &RuntimeConfig) -> Result<(), AppErro
     Ok(())
 }
 
-async fn handle_set(device: &str, mode: &str, config: &RuntimeConfig) -> Result<(), AppError> {
+async fn handle_set(
+    device: &str,
+    mode: &str,
+    sensitivity: u8,
+    config: &RuntimeConfig,
+) -> Result<(), AppError> {
     let dev = resolve::resolve_device(device, config.verbose).await?;
     let modes = extract_music_modes(&dev.info.capabilities);
     let mode_normalized = normalize_for_match(mode);
@@ -101,8 +122,14 @@ async fn handle_set(device: &str, mode: &str, config: &RuntimeConfig) -> Result<
             .get("name")
             .and_then(|n| n.as_str())
             .unwrap_or(mode);
-        if let Some(value) = music_mode.get("value") {
-            dev.set_music_mode(value.clone()).await?;
+        if let Some(mode_value) = music_mode.get("value") {
+            // The API expects a struct: {musicMode: <id>, sensitivity: <0-100>, autoColor: 1}
+            let value = json!({
+                "musicMode": mode_value,
+                "sensitivity": sensitivity,
+                "autoColor": 1,
+            });
+            dev.set_music_mode(value).await?;
             print_json(&json!({
                 "device": dev.name(),
                 "music_mode": mode_name,
