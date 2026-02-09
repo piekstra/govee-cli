@@ -33,6 +33,7 @@ pub enum LightCommand {
         hex: Option<String>,
     },
     /// Set color temperature (2000-9000 Kelvin)
+    #[command(visible_alias = "color-temp")]
     Temp {
         /// Device name or ID
         device: String,
