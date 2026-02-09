@@ -98,7 +98,7 @@ impl Device {
     }
 
     pub async fn set_color_temp(&self, kelvin: u16) -> Result<(), AppError> {
-        if kelvin < 2000 || kelvin > 9000 {
+        if !(2000..=9000).contains(&kelvin) {
             return Err(AppError::InvalidInput(
                 "Color temperature must be between 2000 and 9000 Kelvin".to_string(),
             ));

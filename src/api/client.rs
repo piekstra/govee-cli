@@ -78,10 +78,16 @@ impl GoveeApi {
     fn log_rate_limits(&self, response: &reqwest::Response) {
         if self.verbose {
             if let Some(v) = response.headers().get("API-RateLimit-Remaining") {
-                eprintln!("[verbose] Per-minute rate limit remaining: {}", v.to_str().unwrap_or("?"));
+                eprintln!(
+                    "[verbose] Per-minute rate limit remaining: {}",
+                    v.to_str().unwrap_or("?")
+                );
             }
             if let Some(v) = response.headers().get("X-RateLimit-Remaining") {
-                eprintln!("[verbose] Daily rate limit remaining: {}", v.to_str().unwrap_or("?"));
+                eprintln!(
+                    "[verbose] Daily rate limit remaining: {}",
+                    v.to_str().unwrap_or("?")
+                );
             }
         }
     }
@@ -92,12 +98,7 @@ impl GoveeApi {
         if self.verbose {
             eprintln!("[verbose] GET {}", url);
         }
-        let response = self
-            .client
-            .get(&url)
-            .headers(self.headers())
-            .send()
-            .await?;
+        let response = self.client.get(&url).headers(self.headers()).send().await?;
         self.log_rate_limits(&response);
         let api_response: ApiResponse = response.json().await?;
         api_response.into_result()

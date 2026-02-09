@@ -102,7 +102,7 @@ pub async fn handle(cmd: &LightCommand, config: &RuntimeConfig) -> Result<(), Ap
     Ok(())
 }
 
-fn parse_hex_color(hex: &str) -> Result<(u8, u8, u8), AppError> {
+pub fn parse_hex_color(hex: &str) -> Result<(u8, u8, u8), AppError> {
     let hex = hex.trim_start_matches('#');
     if hex.len() != 6 {
         return Err(AppError::InvalidInput(format!(
@@ -110,11 +110,11 @@ fn parse_hex_color(hex: &str) -> Result<(u8, u8, u8), AppError> {
             hex
         )));
     }
-    let r =
-        u8::from_str_radix(&hex[0..2], 16).map_err(|_| AppError::InvalidInput(format!("Invalid hex color '{}'", hex)))?;
-    let g =
-        u8::from_str_radix(&hex[2..4], 16).map_err(|_| AppError::InvalidInput(format!("Invalid hex color '{}'", hex)))?;
-    let b =
-        u8::from_str_radix(&hex[4..6], 16).map_err(|_| AppError::InvalidInput(format!("Invalid hex color '{}'", hex)))?;
+    let r = u8::from_str_radix(&hex[0..2], 16)
+        .map_err(|_| AppError::InvalidInput(format!("Invalid hex color '{}'", hex)))?;
+    let g = u8::from_str_radix(&hex[2..4], 16)
+        .map_err(|_| AppError::InvalidInput(format!("Invalid hex color '{}'", hex)))?;
+    let b = u8::from_str_radix(&hex[4..6], 16)
+        .map_err(|_| AppError::InvalidInput(format!("Invalid hex color '{}'", hex)))?;
     Ok((r, g, b))
 }
