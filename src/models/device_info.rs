@@ -50,4 +50,31 @@ impl DeviceInfo {
     pub fn has_scenes(&self) -> bool {
         self.has_capability("devices.capabilities.dynamic_scene", "lightScene")
     }
+
+    pub fn has_diy_scenes(&self) -> bool {
+        self.has_capability("devices.capabilities.dynamic_scene", "diyScene")
+    }
+
+    pub fn has_snapshots(&self) -> bool {
+        self.has_capability("devices.capabilities.dynamic_scene", "snapshot")
+    }
+
+    pub fn has_gradient_toggle(&self) -> bool {
+        self.has_capability("devices.capabilities.toggle", "gradientToggle")
+    }
+
+    pub fn has_dreamview_toggle(&self) -> bool {
+        self.has_capability("devices.capabilities.toggle", "dreamViewToggle")
+    }
+
+    pub fn has_segment_color(&self) -> bool {
+        self.has_capability(
+            "devices.capabilities.segment_color_setting",
+            "segmentedColorRgb",
+        )
+    }
+
+    pub fn has_music_mode(&self) -> bool {
+        self.has_capability("devices.capabilities.music_setting", "musicMode")
+    }
 }

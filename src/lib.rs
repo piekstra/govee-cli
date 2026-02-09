@@ -30,5 +30,8 @@ async fn dispatch(command: &Commands, config: &RuntimeConfig) -> Result<(), AppE
         Commands::Power(cmd) => cli::power::handle(cmd, config).await,
         Commands::Light(cmd) => cli::light::handle(cmd, config).await,
         Commands::Scene(cmd) => cli::scene::handle(cmd, config).await,
+        Commands::Toggle(cmd) => cli::toggle::handle(cmd, config).await,
+        Commands::Segment(cmd) => cli::segment::handle(cmd, config).await,
+        Commands::Music(cmd) => cli::music::handle(cmd, config).await,
     }
 }

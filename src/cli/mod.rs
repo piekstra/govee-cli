@@ -1,9 +1,12 @@
 pub mod auth;
 pub mod devices;
 pub mod light;
+pub mod music;
 pub mod output;
 pub mod power;
 pub mod scene;
+pub mod segment;
+pub mod toggle;
 
 use clap::{Parser, Subcommand};
 
@@ -43,4 +46,16 @@ pub enum Commands {
     /// Dynamic scene controls
     #[command(subcommand)]
     Scene(scene::SceneCommand),
+
+    /// Toggle features (gradient, DreamView)
+    #[command(subcommand)]
+    Toggle(toggle::ToggleCommand),
+
+    /// Segment color and brightness controls
+    #[command(subcommand)]
+    Segment(segment::SegmentCommand),
+
+    /// Music mode controls
+    #[command(subcommand)]
+    Music(music::MusicCommand),
 }

@@ -227,8 +227,29 @@ fn device_type_from_sku_with_suffix() {
 fn device_type_unknown_sku() {
     use govee::models::device_type::DeviceType;
     assert_eq!(DeviceType::from_sku("H9999"), DeviceType::Unknown);
-    assert_eq!(DeviceType::from_sku("BaseGroup"), DeviceType::Unknown);
-    assert_eq!(DeviceType::from_sku("SameModeGroup"), DeviceType::Unknown);
+}
+
+#[test]
+fn device_type_new_skus() {
+    use govee::models::device_type::DeviceType;
+    assert_eq!(DeviceType::from_sku("H6004"), DeviceType::H6004);
+    assert_eq!(DeviceType::from_sku("H6008"), DeviceType::H6008);
+    assert_eq!(DeviceType::from_sku("H6022"), DeviceType::H6022);
+    assert_eq!(DeviceType::from_sku("H6046"), DeviceType::H6046);
+    assert_eq!(DeviceType::from_sku("H6056"), DeviceType::H6056);
+    assert_eq!(DeviceType::from_sku("H6076"), DeviceType::H6076);
+    assert_eq!(DeviceType::from_sku("H6099"), DeviceType::H6099);
+    assert_eq!(DeviceType::from_sku("H61A8"), DeviceType::H61A8);
+}
+
+#[test]
+fn device_type_group_skus() {
+    use govee::models::device_type::DeviceType;
+    assert_eq!(DeviceType::from_sku("BaseGroup"), DeviceType::BaseGroup);
+    assert_eq!(
+        DeviceType::from_sku("SameModeGroup"),
+        DeviceType::SameModeGroup
+    );
 }
 
 #[test]
@@ -237,6 +258,15 @@ fn device_type_category() {
     assert_eq!(DeviceType::H60B0.category(), "floor_lamp");
     assert_eq!(DeviceType::H6601.category(), "led_strip");
     assert_eq!(DeviceType::H6057.category(), "light_bar");
+    assert_eq!(DeviceType::H6004.category(), "bulb");
+    assert_eq!(DeviceType::H6008.category(), "bulb");
+    assert_eq!(DeviceType::H6022.category(), "table_lamp");
+    assert_eq!(DeviceType::H6046.category(), "light_bar");
+    assert_eq!(DeviceType::H6076.category(), "panel");
+    assert_eq!(DeviceType::H6099.category(), "tv_backlight");
+    assert_eq!(DeviceType::H61A8.category(), "neon_light");
+    assert_eq!(DeviceType::BaseGroup.category(), "group");
+    assert_eq!(DeviceType::SameModeGroup.category(), "group");
     assert_eq!(DeviceType::Unknown.category(), "unknown");
 }
 
@@ -244,6 +274,14 @@ fn device_type_category() {
 fn device_type_display_name() {
     use govee::models::device_type::DeviceType;
     assert_eq!(DeviceType::H60B0.display_name(), "Uplighter Floor Lamp");
+    assert_eq!(DeviceType::H6004.display_name(), "Smart Bulb");
+    assert_eq!(DeviceType::H6022.display_name(), "Table Lamp");
+    assert_eq!(DeviceType::H6046.display_name(), "RGBIC Light Bar");
+    assert_eq!(DeviceType::H6076.display_name(), "RGBIC Panel");
+    assert_eq!(DeviceType::H6099.display_name(), "TV Backlight");
+    assert_eq!(DeviceType::H61A8.display_name(), "Neon Rope Light");
+    assert_eq!(DeviceType::BaseGroup.display_name(), "Device Group");
+    assert_eq!(DeviceType::SameModeGroup.display_name(), "Sync Group");
     assert_eq!(DeviceType::Unknown.display_name(), "Unknown Device");
 }
 
@@ -260,7 +298,13 @@ fn device_info_has_capability() {
             {"type": "devices.capabilities.range", "instance": "brightness", "parameters": {}},
             {"type": "devices.capabilities.color_setting", "instance": "colorRgb", "parameters": {}},
             {"type": "devices.capabilities.color_setting", "instance": "colorTemperatureK", "parameters": {}},
-            {"type": "devices.capabilities.dynamic_scene", "instance": "lightScene", "parameters": {}}
+            {"type": "devices.capabilities.dynamic_scene", "instance": "lightScene", "parameters": {}},
+            {"type": "devices.capabilities.dynamic_scene", "instance": "diyScene", "parameters": {}},
+            {"type": "devices.capabilities.dynamic_scene", "instance": "snapshot", "parameters": {}},
+            {"type": "devices.capabilities.toggle", "instance": "gradientToggle", "parameters": {}},
+            {"type": "devices.capabilities.toggle", "instance": "dreamViewToggle", "parameters": {}},
+            {"type": "devices.capabilities.segment_color_setting", "instance": "segmentedColorRgb", "parameters": {}},
+            {"type": "devices.capabilities.music_setting", "instance": "musicMode", "parameters": {}}
         ]
     }))
     .unwrap();
@@ -270,6 +314,12 @@ fn device_info_has_capability() {
     assert!(info.has_color_rgb());
     assert!(info.has_color_temp());
     assert!(info.has_scenes());
+    assert!(info.has_diy_scenes());
+    assert!(info.has_snapshots());
+    assert!(info.has_gradient_toggle());
+    assert!(info.has_dreamview_toggle());
+    assert!(info.has_segment_color());
+    assert!(info.has_music_mode());
 }
 
 #[test]
@@ -289,6 +339,12 @@ fn device_info_missing_capability() {
     assert!(!info.has_color_rgb());
     assert!(!info.has_color_temp());
     assert!(!info.has_scenes());
+    assert!(!info.has_diy_scenes());
+    assert!(!info.has_snapshots());
+    assert!(!info.has_gradient_toggle());
+    assert!(!info.has_dreamview_toggle());
+    assert!(!info.has_segment_color());
+    assert!(!info.has_music_mode());
 }
 
 #[test]
@@ -339,6 +395,14 @@ fn capability_type_round_trip() {
         ("devices.capabilities.mode", CapabilityType::Mode),
         ("devices.capabilities.work_mode", CapabilityType::WorkMode),
         ("devices.capabilities.online", CapabilityType::Online),
+        (
+            "devices.capabilities.music_setting",
+            CapabilityType::MusicSetting,
+        ),
+        (
+            "devices.capabilities.segment_color_setting",
+            CapabilityType::SegmentColorSetting,
+        ),
     ];
     for (api_str, expected) in types {
         let parsed = CapabilityType::from_api_type(api_str);

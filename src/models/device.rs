@@ -115,6 +115,86 @@ impl Device {
             .await
     }
 
+    // -- Toggle --
+
+    pub async fn set_gradient(&self, on: bool) -> Result<(), AppError> {
+        self.require_capability("devices.capabilities.toggle", "gradientToggle")?;
+        self.api
+            .control_device(
+                self.sku(),
+                self.device_id(),
+                "devices.capabilities.toggle",
+                "gradientToggle",
+                json!(if on { 1 } else { 0 }),
+            )
+            .await
+    }
+
+    pub async fn set_dreamview(&self, on: bool) -> Result<(), AppError> {
+        self.require_capability("devices.capabilities.toggle", "dreamViewToggle")?;
+        self.api
+            .control_device(
+                self.sku(),
+                self.device_id(),
+                "devices.capabilities.toggle",
+                "dreamViewToggle",
+                json!(if on { 1 } else { 0 }),
+            )
+            .await
+    }
+
+    // -- Segment --
+
+    pub async fn set_segment_color(&self, segments: serde_json::Value) -> Result<(), AppError> {
+        self.require_capability(
+            "devices.capabilities.segment_color_setting",
+            "segmentedColorRgb",
+        )?;
+        self.api
+            .control_device(
+                self.sku(),
+                self.device_id(),
+                "devices.capabilities.segment_color_setting",
+                "segmentedColorRgb",
+                segments,
+            )
+            .await
+    }
+
+    pub async fn set_segment_brightness(
+        &self,
+        segments: serde_json::Value,
+    ) -> Result<(), AppError> {
+        self.require_capability(
+            "devices.capabilities.segment_color_setting",
+            "segmentedBrightness",
+        )?;
+        self.api
+            .control_device(
+                self.sku(),
+                self.device_id(),
+                "devices.capabilities.segment_color_setting",
+                "segmentedBrightness",
+                segments,
+            )
+            .await
+    }
+
+    // -- Music --
+
+    pub async fn set_music_mode(&self, value: serde_json::Value) -> Result<(), AppError> {
+        self.require_capability("devices.capabilities.music_setting", "musicMode")?;
+        self.api
+            .control_device(
+                self.sku(),
+                self.device_id(),
+                "devices.capabilities.music_setting",
+                "musicMode",
+                value,
+            )
+            .await
+    }
+
     // -- Scenes --
 
     pub async fn activate_scene(
@@ -129,6 +209,23 @@ impl Device {
                 self.device_id(),
                 "devices.capabilities.dynamic_scene",
                 "lightScene",
+                json!({"paramId": param_id, "id": id}),
+            )
+            .await
+    }
+
+    pub async fn activate_snapshot(
+        &self,
+        param_id: serde_json::Value,
+        id: serde_json::Value,
+    ) -> Result<(), AppError> {
+        self.require_capability("devices.capabilities.dynamic_scene", "snapshot")?;
+        self.api
+            .control_device(
+                self.sku(),
+                self.device_id(),
+                "devices.capabilities.dynamic_scene",
+                "snapshot",
                 json!({"paramId": param_id, "id": id}),
             )
             .await
