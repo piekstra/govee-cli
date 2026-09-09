@@ -73,13 +73,23 @@ impl GoveeApp {
     }
 
     async fn post(&self, path: &str, body: Value, token: Option<&str>) -> Result<Value, AppError> {
+        self.request(reqwest::Method::POST, path, body, token).await
+    }
+
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Value,
+        token: Option<&str>,
+    ) -> Result<Value, AppError> {
         let url = format!("{BASE}{path}");
         if self.verbose {
-            eprintln!("POST {url}");
+            eprintln!("{method} {url}");
         }
         let resp = self
             .client
-            .post(&url)
+            .request(method, &url)
             .headers(self.headers(token))
             .json(&body)
             .send()
@@ -90,7 +100,11 @@ impl GoveeApp {
             eprintln!("HTTP {} ({} bytes)", status.as_u16(), text.len());
         }
         serde_json::from_str(&text).map_err(|_| AppError::Api {
-            message: format!("HTTP {}: {}", status.as_u16(), text.chars().take(200).collect::<String>()),
+            message: format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(200).collect::<String>()
+            ),
             error_code: Some(status.as_u16() as i32),
         })
     }
@@ -109,7 +123,9 @@ impl GoveeApp {
             other => Err(AppError::Api {
                 message: format!(
                     "verification request failed: {}",
-                    v.get("message").and_then(Value::as_str).unwrap_or("no message")
+                    v.get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no message")
                 ),
                 error_code: other.map(|n| n as i32),
             }),
@@ -126,7 +142,9 @@ impl GoveeApp {
         if let Some(c) = code {
             body["code"] = json!(c);
         }
-        let v = self.post("/account/rest/account/v2/login", body, None).await?;
+        let v = self
+            .post("/account/rest/account/v2/login", body, None)
+            .await?;
         match v.get("status").and_then(Value::as_i64) {
             Some(200) => {
                 let client = v.get("client").cloned().unwrap_or(Value::Null);
@@ -152,7 +170,9 @@ impl GoveeApp {
             other => Err(AppError::Api {
                 message: format!(
                     "login failed: {}",
-                    v.get("message").and_then(Value::as_str).unwrap_or("no message")
+                    v.get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no message")
                 ),
                 error_code: other.map(|n| n as i32),
             }),
@@ -171,10 +191,160 @@ impl GoveeApp {
             other => Err(AppError::Api {
                 message: format!(
                     "device list failed: {}",
-                    v.get("message").and_then(Value::as_str).unwrap_or("no message")
+                    v.get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no message")
                 ),
                 error_code: other.map(|n| n as i32),
             }),
         }
     }
+}
+
+/// How a device can be reached. `Wifi` devices are cloud-reachable (and so
+/// visible to the Platform API and Google Home); `Bluetooth` devices are
+/// controllable only from a phone next to them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Connectivity {
+    Wifi,
+    Bluetooth,
+}
+
+/// One row of the app's device list, reduced to what the CLI needs.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AppDevice {
+    pub sku: String,
+    pub device: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    pub connectivity: Connectivity,
+}
+
+/// A device row as `devices list` prints it: the Platform view joined with
+/// the app view, plus the app's Bluetooth-only devices.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DeviceRow {
+    pub name: String,
+    pub device: String,
+    pub sku: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub category: String,
+    pub connectivity: Connectivity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+}
+
+/// A Platform-listed device, as much of it as the merge needs.
+#[derive(Debug, Clone)]
+pub struct PlatformDevice {
+    pub device: String,
+    pub sku: String,
+    pub name: String,
+    pub kind: String,
+    pub category: String,
+}
+
+/// Join the Platform list with the app view. Platform devices are Wi-Fi by
+/// definition (the Platform API only lists cloud devices) and gain their
+/// room from the app; app devices the Platform never listed are appended
+/// with the connectivity the app reports (Bluetooth-only in practice; a
+/// Wi-Fi device missing from the Platform list is Platform-side lag and is
+/// shown rather than dropped). With no app view, rows come out room-less.
+pub fn merge_app_view(platform: &[PlatformDevice], app: Option<&[AppDevice]>) -> Vec<DeviceRow> {
+    let mut rows: Vec<DeviceRow> = platform
+        .iter()
+        .map(|p| DeviceRow {
+            name: p.name.clone(),
+            device: p.device.clone(),
+            sku: p.sku.clone(),
+            kind: p.kind.clone(),
+            category: p.category.clone(),
+            connectivity: Connectivity::Wifi,
+            room: app.and_then(|a| {
+                a.iter()
+                    .find(|x| x.device == p.device)
+                    .and_then(|x| x.room.clone())
+            }),
+        })
+        .collect();
+    if let Some(app) = app {
+        for a in app.iter() {
+            if !platform.iter().any(|p| p.device == a.device) {
+                rows.push(DeviceRow {
+                    name: a.name.clone(),
+                    device: a.device.clone(),
+                    sku: a.sku.clone(),
+                    kind: match a.connectivity {
+                        Connectivity::Bluetooth => "bluetooth-only".into(),
+                        Connectivity::Wifi => "app-only".into(),
+                    },
+                    category: "app-only".into(),
+                    connectivity: a.connectivity,
+                    room: a.room.clone(),
+                });
+            }
+        }
+    }
+    rows
+}
+
+/// Parse the app device list into rows, resolving groups to room names and
+/// deciding connectivity from the device's Wi-Fi settings.
+pub fn app_devices(list: &Value) -> Vec<AppDevice> {
+    let groups: Vec<(i64, String)> = list
+        .get("groups")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|g| {
+                    Some((
+                        g.get("groupId")?.as_i64()?,
+                        g.get("groupName")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    list.get("devices")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| {
+                    let settings = d
+                        .pointer("/deviceExt/deviceSettings")
+                        .and_then(Value::as_str)
+                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                        .unwrap_or(Value::Null);
+                    let wifi = settings
+                        .get("wifiName")
+                        .and_then(Value::as_str)
+                        .is_some_and(|w| !w.is_empty())
+                        || settings.get("wifiSoftVersion").is_some();
+                    Some(AppDevice {
+                        sku: d.get("sku")?.as_str()?.to_string(),
+                        device: d.get("device")?.as_str()?.to_string(),
+                        name: d
+                            .get("deviceName")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        room: d.get("groupId").and_then(Value::as_i64).and_then(|gid| {
+                            groups
+                                .iter()
+                                .find(|(id, _)| *id == gid)
+                                .map(|(_, n)| n.clone())
+                        }),
+                        connectivity: if wifi {
+                            Connectivity::Wifi
+                        } else {
+                            Connectivity::Bluetooth
+                        },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }

@@ -39,7 +39,12 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
                 .collect()
         })
         .unwrap_or_default();
-    let room_name = |gid: i64| groups.iter().find(|(id, _)| *id == gid).map(|(_, n)| n.clone());
+    let room_name = |gid: i64| {
+        groups
+            .iter()
+            .find(|(id, _)| *id == gid)
+            .map(|(_, n)| n.clone())
+    };
     let devices: Vec<&Value> = list
         .get("devices")
         .and_then(Value::as_array)
@@ -70,18 +75,18 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
             Ok(())
         }
         RoomsCommand::Devices => {
-            let items: Vec<Value> = devices
-                .iter()
+            let items: Vec<Value> = crate::api::app::app_devices(&list)
+                .into_iter()
                 .filter_map(|d| {
-                    let sku = d.get("sku")?.as_str()?;
-                    let mac = d.get("device")?.as_str()?;
-                    let name = d.get("deviceName").and_then(Value::as_str).unwrap_or("");
-                    let room = d.get("groupId").and_then(Value::as_i64).and_then(room_name)?;
+                    let room = d.room?;
                     Some(json!({
-                        "id": format!("{sku}_{mac}"),
-                        "name": name,
+                        "id": format!("{}_{}", d.sku, d.device),
+                        "name": d.name,
                         "room": room,
                         "source": "govee",
+                        "cloud": d.connectivity == crate::api::app::Connectivity::Wifi,
+                        "connectivity": d.connectivity,
+                        "connectivity": d.connectivity,
                     }))
                 })
                 .collect();
