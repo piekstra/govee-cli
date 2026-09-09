@@ -293,7 +293,18 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
                 )));
             }
             confirm(*force, &format!("Delete empty room \"{}\"?", r.name))?;
-            let keep: Vec<i64> = rooms
+            // `manage_rooms` sends the complete remaining room list, so read
+            // it fresh after the prompt like the other whole-collection writes.
+            let fresh_list = app.device_list(token).await?;
+            let fresh_rooms = rooms_of(&fresh_list);
+            let fresh_devices = app_devices(&fresh_list);
+            if !members_of(&fresh_devices, r.id).is_empty() {
+                return Err(AppError::InvalidInput(format!(
+                    "`{}` gained devices while waiting; move them out first",
+                    r.name
+                )));
+            }
+            let keep: Vec<i64> = fresh_rooms
                 .iter()
                 .map(|x| x.id)
                 .filter(|id| *id != r.id)
