@@ -663,6 +663,9 @@ mod room_writes {
             2,
             "already a member: no duplicate"
         );
+        assert!(placed_in(&d, "AA", 1));
+        assert!(!placed_in(&d, "AA", 2));
+        assert!(!placed_in(&d, "DD", 1));
     }
 
     #[test]
