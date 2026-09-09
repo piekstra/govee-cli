@@ -84,7 +84,8 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
                         "name": d.name,
                         "room": room,
                         "source": "govee",
-                        "cloud": d.connectivity == "wifi",
+                        "cloud": d.connectivity == crate::api::app::Connectivity::Wifi,
+                        "connectivity": d.connectivity,
                         "connectivity": d.connectivity,
                     }))
                 })
