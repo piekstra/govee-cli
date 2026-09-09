@@ -338,8 +338,10 @@ pub struct PlatformDevice {
 
 /// Join the Platform list with the app view. Platform devices are Wi-Fi by
 /// definition (the Platform API only lists cloud devices) and gain their
-/// room from the app; app devices the Platform never listed are appended as
-/// Bluetooth-only rows. With no app view, rows come out room-less.
+/// room from the app; app devices the Platform never listed are appended
+/// with the connectivity the app reports (Bluetooth-only in practice; a
+/// Wi-Fi device missing from the Platform list is Platform-side lag and is
+/// shown rather than dropped). With no app view, rows come out room-less.
 pub fn merge_app_view(platform: &[PlatformDevice], app: Option<&[AppDevice]>) -> Vec<DeviceRow> {
     let mut rows: Vec<DeviceRow> = platform
         .iter()
@@ -358,18 +360,18 @@ pub fn merge_app_view(platform: &[PlatformDevice], app: Option<&[AppDevice]>) ->
         })
         .collect();
     if let Some(app) = app {
-        for a in app
-            .iter()
-            .filter(|a| a.connectivity == Connectivity::Bluetooth)
-        {
+        for a in app.iter() {
             if !platform.iter().any(|p| p.device == a.device) {
                 rows.push(DeviceRow {
                     name: a.name.clone(),
                     device: a.device.clone(),
                     sku: a.sku.clone(),
-                    kind: "bluetooth-only".into(),
+                    kind: match a.connectivity {
+                        Connectivity::Bluetooth => "bluetooth-only".into(),
+                        Connectivity::Wifi => "app-only".into(),
+                    },
                     category: "app-only".into(),
-                    connectivity: Connectivity::Bluetooth,
+                    connectivity: a.connectivity,
                     room: a.room.clone(),
                 });
             }
