@@ -45,7 +45,10 @@ async fn app_view(
 ) -> Result<Option<Vec<crate::api::app::AppDevice>>, AppError> {
     let session = match crate::cli::auth::load_account() {
         Ok(s) if !s.token.is_empty() => s,
-        _ => return Ok(None),
+        // No account stored (or an empty one): the Platform view stands alone.
+        Ok(_) | Err(AppError::NotAuthenticated) => return Ok(None),
+        // The keychain itself refused: that is a failure, not "no account".
+        Err(e) => return Err(e),
     };
     let app = crate::api::app::GoveeApp::new(session.client_id.clone(), config.verbose)?;
     let list = app.device_list(&session.token).await?;
@@ -83,39 +86,67 @@ async fn handle_list(config: &RuntimeConfig) -> Result<(), AppError> {
 }
 
 async fn handle_get(device: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    let capabilities: Vec<serde_json::Value> = dev
-        .info
-        .capabilities
-        .iter()
-        .map(|c| {
-            json!({
-                "type": c.capability_type,
-                "instance": c.instance,
-            })
-        })
-        .collect();
-
     let app = app_view_or_warn(config).await;
-    let room = app.as_ref().and_then(|a| {
-        a.iter()
-            .find(|x| x.device == dev.device_id())
-            .and_then(|x| x.room.clone())
-    });
-    print_output(
-        &json!({
-            "name": dev.name(),
-            "device": dev.device_id(),
-            "sku": dev.sku(),
-            "type": dev.device_type.display_name(),
-            "category": dev.device_type.category(),
-            "connectivity": "wifi",
-            "room": room,
-            "capabilities": capabilities,
-        }),
-        config.output_mode,
-    );
-    Ok(())
+    match resolve::resolve_device(device, config.verbose).await {
+        Ok(dev) => {
+            let capabilities: Vec<serde_json::Value> = dev
+                .info
+                .capabilities
+                .iter()
+                .map(|c| {
+                    json!({
+                        "type": c.capability_type,
+                        "instance": c.instance,
+                    })
+                })
+                .collect();
+            let platform = crate::api::app::PlatformDevice {
+                device: dev.device_id().to_string(),
+                sku: dev.sku().to_string(),
+                name: dev.name().to_string(),
+                kind: dev.device_type.display_name().to_string(),
+                category: dev.device_type.category().to_string(),
+            };
+            // The same typed row `devices list` prints, plus capabilities.
+            let row = crate::api::app::merge_app_view(&[platform], app.as_deref())
+                .into_iter()
+                .next()
+                .expect("one platform device yields one row");
+            let mut v = serde_json::to_value(row)?;
+            v["capabilities"] = json!(capabilities);
+            print_output(&v, config.output_mode);
+            Ok(())
+        }
+        // Not on the Platform API: it may be one of the app's Bluetooth-only
+        // devices, which `devices list` shows and this command must honour.
+        Err(AppError::DeviceNotFound(_)) => {
+            let rows = crate::api::app::merge_app_view(&[], app.as_deref());
+            let want = device.trim().to_lowercase();
+            let hit = rows
+                .iter()
+                .find(|r| {
+                    r.name.to_lowercase() == want
+                        || format!("{}_{}", r.sku, r.device).to_lowercase() == want
+                })
+                .or_else(|| {
+                    let partial: Vec<_> = rows
+                        .iter()
+                        .filter(|r| r.name.to_lowercase().contains(&want))
+                        .collect();
+                    if partial.len() == 1 {
+                        Some(partial[0])
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| AppError::DeviceNotFound(device.to_string()))?;
+            let mut v = serde_json::to_value(hit)?;
+            v["capabilities"] = json!([]);
+            print_output(&v, config.output_mode);
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 async fn handle_search(query: &str, config: &RuntimeConfig) -> Result<(), AppError> {

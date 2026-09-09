@@ -73,13 +73,23 @@ impl GoveeApp {
     }
 
     async fn post(&self, path: &str, body: Value, token: Option<&str>) -> Result<Value, AppError> {
+        self.request(reqwest::Method::POST, path, body, token).await
+    }
+
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Value,
+        token: Option<&str>,
+    ) -> Result<Value, AppError> {
         let url = format!("{BASE}{path}");
         if self.verbose {
-            eprintln!("POST {url}");
+            eprintln!("{method} {url}");
         }
         let resp = self
             .client
-            .post(&url)
+            .request(method, &url)
             .headers(self.headers(token))
             .json(&body)
             .send()
@@ -188,6 +198,95 @@ impl GoveeApp {
                 error_code: other.map(|n| n as i32),
             }),
         }
+    }
+}
+
+fn status_ok(v: &Value, what: &str) -> Result<(), AppError> {
+    match v.get("status").and_then(Value::as_i64) {
+        Some(200) => Ok(()),
+        Some(401) | Some(403) => Err(AppError::NotAuthenticated),
+        other => Err(AppError::Api {
+            message: format!(
+                "{what}: {}",
+                v.get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no message")
+            ),
+            error_code: other.map(|n| n as i32),
+        }),
+    }
+}
+
+/// The legacy request envelope the app's room calls carry.
+fn envelope() -> Value {
+    json!({"transaction": now_ms().to_string(), "key": "", "view": 0})
+}
+
+impl GoveeApp {
+    /// Create a room; returns its id. (`POST /bff-app/v1/devices/groups`)
+    pub async fn create_room(&self, token: &str, name: &str) -> Result<i64, AppError> {
+        let mut body = envelope();
+        body["groupName"] = json!(name);
+        let v = self
+            .post("/bff-app/v1/devices/groups", body, Some(token))
+            .await?;
+        status_ok(&v, "create room")?;
+        v.pointer("/data/groupId")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| AppError::Api {
+                message: "create room succeeded but returned no groupId".into(),
+                error_code: None,
+            })
+    }
+
+    /// Set a room's name and its complete membership: what the app's "Edit
+    /// the Room" screen sends. (`PUT /bff-app/v1/group/edit`)
+    pub async fn edit_room(
+        &self,
+        token: &str,
+        group_id: i64,
+        name: &str,
+        members: &[(String, String)],
+    ) -> Result<(), AppError> {
+        let mut body = envelope();
+        body["transaction"] = json!("");
+        body["groupId"] = json!(group_id);
+        body["groupName"] = json!(name);
+        body["devices"] = json!(members
+            .iter()
+            .map(|(device, sku)| json!({"device": device, "sku": sku}))
+            .collect::<Vec<_>>());
+        let v = self
+            .request(
+                reqwest::Method::PUT,
+                "/bff-app/v1/group/edit",
+                body,
+                Some(token),
+            )
+            .await?;
+        status_ok(&v, "edit room")
+    }
+
+    /// Delete rooms, keeping the others in `keep` order: the app's "Room
+    /// Management" call. (`PUT /bff-app/v1/devices/groups/manage`)
+    pub async fn manage_rooms(
+        &self,
+        token: &str,
+        keep: &[i64],
+        delete: &[i64],
+    ) -> Result<(), AppError> {
+        let mut body = envelope();
+        body["groupIds"] = json!(keep);
+        body["deleteGroupIds"] = json!(delete);
+        let v = self
+            .request(
+                reqwest::Method::PUT,
+                "/bff-app/v1/devices/groups/manage",
+                body,
+                Some(token),
+            )
+            .await?;
+        status_ok(&v, "manage rooms")
     }
 }
 
