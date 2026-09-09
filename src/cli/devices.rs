@@ -109,9 +109,11 @@ async fn handle_get(device: &str, config: &RuntimeConfig) -> Result<(), AppError
         .collect();
 
     let app = app_view(config).await;
-    let room = app
-        .as_ref()
-        .and_then(|a| a.iter().find(|x| x.device == dev.device_id()).and_then(|x| x.room.clone()));
+    let room = app.as_ref().and_then(|a| {
+        a.iter()
+            .find(|x| x.device == dev.device_id())
+            .and_then(|x| x.room.clone())
+    });
     print_output(
         &json!({
             "name": dev.name(),

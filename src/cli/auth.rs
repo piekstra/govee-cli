@@ -77,7 +77,10 @@ async fn handle_login_account(
         Ok(a) => (a.client_id, Some(a.email)),
         Err(_) => (GoveeApp::new_client_id(), None),
     };
-    let email = match email_flag.map(str::to_string).or_else(|| std::env::var("GOVEE_EMAIL").ok().filter(|e| !e.is_empty())) {
+    let email = match email_flag
+        .map(str::to_string)
+        .or_else(|| std::env::var("GOVEE_EMAIL").ok().filter(|e| !e.is_empty()))
+    {
         Some(e) => e,
         None if interactive => {
             let mut p = dialoguer::Input::<String>::new().with_prompt("Govee account email");
@@ -88,7 +91,9 @@ async fn handle_login_account(
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?
         }
         None => remembered_email.ok_or_else(|| {
-            AppError::InvalidInput("not a terminal: pass --email and the password on --stdin".into())
+            AppError::InvalidInput(
+                "not a terminal: pass --email and the password on --stdin".into(),
+            )
         })?,
     };
     let password = if stdin {
@@ -134,7 +139,9 @@ async fn handle_login_account(
                     client_id,
                     email: email.clone(),
                 })?)?;
-                print_json(&json!({"status": "account_authenticated", "email": email, "account_id": account_id}));
+                print_json(
+                    &json!({"status": "account_authenticated", "email": email, "account_id": account_id}),
+                );
                 return Ok(());
             }
             LoginOutcome::NeedsCode => {
@@ -147,7 +154,9 @@ async fn handle_login_account(
                 app.request_code(&email).await?;
                 eprintln!("Govee emailed a verification code to {email}.");
                 if !interactive {
-                    print_json(&json!({"status": "code_sent", "email": email, "next": "re-run `govee auth login-account --stdin --code <CODE>`"}));
+                    print_json(
+                        &json!({"status": "code_sent", "email": email, "next": "re-run `govee auth login-account --stdin --code <CODE>`"}),
+                    );
                     return Ok(());
                 }
                 let c = dialoguer::Input::<String>::new()
@@ -159,7 +168,6 @@ async fn handle_login_account(
         }
     }
 }
-
 
 async fn handle_login(config: &RuntimeConfig) -> Result<(), AppError> {
     // Check if already provided via env var

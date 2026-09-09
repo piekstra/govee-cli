@@ -39,7 +39,12 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
                 .collect()
         })
         .unwrap_or_default();
-    let room_name = |gid: i64| groups.iter().find(|(id, _)| *id == gid).map(|(_, n)| n.clone());
+    let room_name = |gid: i64| {
+        groups
+            .iter()
+            .find(|(id, _)| *id == gid)
+            .map(|(_, n)| n.clone())
+    };
     let devices: Vec<&Value> = list
         .get("devices")
         .and_then(Value::as_array)

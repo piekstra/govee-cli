@@ -90,7 +90,11 @@ impl GoveeApp {
             eprintln!("HTTP {} ({} bytes)", status.as_u16(), text.len());
         }
         serde_json::from_str(&text).map_err(|_| AppError::Api {
-            message: format!("HTTP {}: {}", status.as_u16(), text.chars().take(200).collect::<String>()),
+            message: format!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(200).collect::<String>()
+            ),
             error_code: Some(status.as_u16() as i32),
         })
     }
@@ -109,7 +113,9 @@ impl GoveeApp {
             other => Err(AppError::Api {
                 message: format!(
                     "verification request failed: {}",
-                    v.get("message").and_then(Value::as_str).unwrap_or("no message")
+                    v.get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no message")
                 ),
                 error_code: other.map(|n| n as i32),
             }),
@@ -126,7 +132,9 @@ impl GoveeApp {
         if let Some(c) = code {
             body["code"] = json!(c);
         }
-        let v = self.post("/account/rest/account/v2/login", body, None).await?;
+        let v = self
+            .post("/account/rest/account/v2/login", body, None)
+            .await?;
         match v.get("status").and_then(Value::as_i64) {
             Some(200) => {
                 let client = v.get("client").cloned().unwrap_or(Value::Null);
@@ -152,7 +160,9 @@ impl GoveeApp {
             other => Err(AppError::Api {
                 message: format!(
                     "login failed: {}",
-                    v.get("message").and_then(Value::as_str).unwrap_or("no message")
+                    v.get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no message")
                 ),
                 error_code: other.map(|n| n as i32),
             }),
@@ -171,7 +181,9 @@ impl GoveeApp {
             other => Err(AppError::Api {
                 message: format!(
                     "device list failed: {}",
-                    v.get("message").and_then(Value::as_str).unwrap_or("no message")
+                    v.get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("no message")
                 ),
                 error_code: other.map(|n| n as i32),
             }),
@@ -200,7 +212,12 @@ pub fn app_devices(list: &Value) -> Vec<AppDevice> {
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
-                .filter_map(|g| Some((g.get("groupId")?.as_i64()?, g.get("groupName")?.as_str()?.to_string())))
+                .filter_map(|g| {
+                    Some((
+                        g.get("groupId")?.as_i64()?,
+                        g.get("groupName")?.as_str()?.to_string(),
+                    ))
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -214,16 +231,25 @@ pub fn app_devices(list: &Value) -> Vec<AppDevice> {
                         .and_then(Value::as_str)
                         .and_then(|s| serde_json::from_str::<Value>(s).ok())
                         .unwrap_or(Value::Null);
-                    let wifi = settings.get("wifiName").and_then(Value::as_str).is_some_and(|w| !w.is_empty())
+                    let wifi = settings
+                        .get("wifiName")
+                        .and_then(Value::as_str)
+                        .is_some_and(|w| !w.is_empty())
                         || settings.get("wifiSoftVersion").is_some();
                     Some(AppDevice {
                         sku: d.get("sku")?.as_str()?.to_string(),
                         device: d.get("device")?.as_str()?.to_string(),
-                        name: d.get("deviceName").and_then(Value::as_str).unwrap_or("").to_string(),
-                        room: d
-                            .get("groupId")
-                            .and_then(Value::as_i64)
-                            .and_then(|gid| groups.iter().find(|(id, _)| *id == gid).map(|(_, n)| n.clone())),
+                        name: d
+                            .get("deviceName")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        room: d.get("groupId").and_then(Value::as_i64).and_then(|gid| {
+                            groups
+                                .iter()
+                                .find(|(id, _)| *id == gid)
+                                .map(|(_, n)| n.clone())
+                        }),
                         connectivity: if wifi { "wifi" } else { "bluetooth" },
                     })
                 })
