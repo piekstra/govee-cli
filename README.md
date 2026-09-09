@@ -100,6 +100,20 @@ Add `--verbose` to see HTTP requests and rate limit info:
 govee devices list --verbose
 ```
 
+### Rooms (Govee Home account)
+
+The Platform API has no rooms; the Govee Home app's own API does. Sign in to
+the account once (Govee emails a verification code):
+
+```bash
+op read "op://Private/auth.govee.com/password" | govee auth login-account --stdin --email you@example.com
+# → status "code_sent"; then, with the code from the email:
+op read "op://Private/auth.govee.com/password" | govee auth login-account --stdin --email you@example.com --code 123456
+
+govee rooms list                    # rooms with device counts
+govee rooms devices                 # device-rooms/v1 (ids are SKU_MAC, as Google Home sees them), for `ghome audit --expect -`
+```
+
 ## Authentication
 
 The CLI supports two methods for providing your Govee API key:

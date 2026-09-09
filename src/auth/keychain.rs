@@ -30,3 +30,32 @@ pub fn clear_api_key() -> Result<(), AppError> {
         Err(e) => Err(AppError::Keychain(e.to_string())),
     }
 }
+
+const ACCOUNT_NAME: &str = "account";
+
+fn account_entry() -> Result<Entry, AppError> {
+    Entry::new(SERVICE, ACCOUNT_NAME).map_err(|e| AppError::Keychain(e.to_string()))
+}
+
+/// The app-account session: a JSON blob `{token, account_id, client_id, email}`.
+pub fn store_account(blob: &str) -> Result<(), AppError> {
+    account_entry()?
+        .set_password(blob)
+        .map_err(|e| AppError::Keychain(e.to_string()))
+}
+
+pub fn get_account() -> Result<Option<String>, AppError> {
+    match account_entry()?.get_password() {
+        Ok(val) => Ok(Some(val)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(AppError::Keychain(e.to_string())),
+    }
+}
+
+pub fn clear_account() -> Result<(), AppError> {
+    match account_entry()?.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(AppError::Keychain(e.to_string())),
+    }
+}

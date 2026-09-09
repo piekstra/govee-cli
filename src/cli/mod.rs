@@ -4,6 +4,7 @@ pub mod light;
 pub mod music;
 pub mod output;
 pub mod power;
+pub mod rooms;
 pub mod scene;
 pub mod segment;
 pub mod toggle;
@@ -58,4 +59,7 @@ pub enum Commands {
     /// Music mode controls
     #[command(subcommand)]
     Music(music::MusicCommand),
+    /// Rooms as the Govee Home app has them (account login required)
+    #[command(subcommand)]
+    Rooms(rooms::RoomsCommand),
 }
