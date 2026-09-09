@@ -453,3 +453,81 @@ fn error_api_includes_error_code() {
     assert_eq!(j["error"], "api");
     assert_eq!(j["error_code"], 400);
 }
+
+mod app_view {
+    use govee::api::app::{app_devices, merge_app_view, AppDevice, Connectivity, PlatformDevice};
+    use serde_json::json;
+
+    fn list() -> serde_json::Value {
+        json!({
+            "status": 200,
+            "groups": [{"groupId": 1, "groupName": "Office"}, {"groupId": 2, "groupName": "Kitchen"}],
+            "devices": [
+                {"device": "AA", "sku": "H6076", "deviceName": "Wifi Lamp", "groupId": 1,
+                 "deviceExt": {"deviceSettings": "{\"wifiName\":\"HomeNet\",\"wifiSoftVersion\":\"1.0\"}"}},
+                {"device": "BB", "sku": "H6076", "deviceName": "Wifi By Version", "groupId": 2,
+                 "deviceExt": {"deviceSettings": "{\"wifiSoftVersion\":\"1.0\"}"}},
+                {"device": "CC", "sku": "H617A", "deviceName": "BT Strip", "groupId": 1,
+                 "deviceExt": {"deviceSettings": "{\"bleName\":\"strip\"}"}},
+                {"device": "DD", "sku": "H617A", "deviceName": "Orphan", "groupId": 99,
+                 "deviceExt": {"deviceSettings": "not json"}},
+                {"device": "EE", "sku": "H6008", "deviceName": "No Settings"}
+            ]
+        })
+    }
+
+    #[test]
+    fn parses_connectivity_and_rooms_from_the_app_list() {
+        let d = app_devices(&list());
+        assert_eq!(d.len(), 5);
+        let by = |id: &str| d.iter().find(|x| x.device == id).unwrap();
+        assert_eq!(by("AA").connectivity, Connectivity::Wifi);
+        assert_eq!(by("AA").room.as_deref(), Some("Office"));
+        assert_eq!(by("BB").connectivity, Connectivity::Wifi);
+        assert_eq!(by("CC").connectivity, Connectivity::Bluetooth);
+        assert_eq!(by("DD").connectivity, Connectivity::Bluetooth);
+        assert!(by("DD").room.is_none(), "unknown group id yields no room");
+        assert_eq!(by("EE").connectivity, Connectivity::Bluetooth);
+        assert!(app_devices(&json!({"status": 200})).is_empty());
+    }
+
+    #[test]
+    fn merge_joins_rooms_and_appends_bluetooth_only_devices() {
+        let platform = vec![PlatformDevice {
+            device: "AA".into(),
+            sku: "H6076".into(),
+            name: "Wifi Lamp".into(),
+            kind: "light".into(),
+            category: "Light".into(),
+        }];
+        let app = vec![
+            AppDevice {
+                sku: "H6076".into(),
+                device: "AA".into(),
+                name: "Wifi Lamp".into(),
+                room: Some("Office".into()),
+                connectivity: Connectivity::Wifi,
+            },
+            AppDevice {
+                sku: "H617A".into(),
+                device: "CC".into(),
+                name: "BT Strip".into(),
+                room: Some("Office".into()),
+                connectivity: Connectivity::Bluetooth,
+            },
+        ];
+        let rows = merge_app_view(&platform, Some(&app));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].connectivity, Connectivity::Wifi);
+        assert_eq!(rows[0].room.as_deref(), Some("Office"));
+        assert_eq!(rows[1].kind, "bluetooth-only");
+        assert_eq!(rows[1].connectivity, Connectivity::Bluetooth);
+        let alone = merge_app_view(&platform, None);
+        assert_eq!(alone.len(), 1);
+        assert!(alone[0].room.is_none());
+        assert_eq!(
+            serde_json::to_value(Connectivity::Bluetooth).unwrap(),
+            json!("bluetooth")
+        );
+    }
+}

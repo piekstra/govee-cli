@@ -36,61 +36,49 @@ pub async fn handle(cmd: &DevicesCommand, config: &RuntimeConfig) -> Result<(), 
     }
 }
 
-/// The app's view of every device, when the account is logged in: room and
-/// connectivity for cloud devices, and the Bluetooth-only devices the
-/// Platform API never lists. `None` without an account login.
-async fn app_view(config: &RuntimeConfig) -> Option<Vec<crate::api::app::AppDevice>> {
-    let session = crate::cli::auth::load_account().ok()?;
-    if session.token.is_empty() {
-        return None;
+/// The app's view of every device, when the account is logged in. `Ok(None)`
+/// means no account is configured (the Platform view stands alone);
+/// `Err` means an account is configured and the app call failed, which the
+/// caller reports rather than silently degrading.
+async fn app_view(
+    config: &RuntimeConfig,
+) -> Result<Option<Vec<crate::api::app::AppDevice>>, AppError> {
+    let session = match crate::cli::auth::load_account() {
+        Ok(s) if !s.token.is_empty() => s,
+        _ => return Ok(None),
+    };
+    let app = crate::api::app::GoveeApp::new(session.client_id.clone(), config.verbose)?;
+    let list = app.device_list(&session.token).await?;
+    Ok(Some(crate::api::app::app_devices(&list)))
+}
+
+/// Fetch the app view, downgrading a failure to a stderr warning so a stale
+/// account session never hides the Platform listing.
+async fn app_view_or_warn(config: &RuntimeConfig) -> Option<Vec<crate::api::app::AppDevice>> {
+    match app_view(config).await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("warning: app view unavailable ({e}); rooms and Bluetooth-only devices omitted — run `govee auth login-account`");
+            None
+        }
     }
-    let app = crate::api::app::GoveeApp::new(session.client_id.clone(), config.verbose).ok()?;
-    let list = app.device_list(&session.token).await.ok()?;
-    Some(crate::api::app::app_devices(&list))
 }
 
 async fn handle_list(config: &RuntimeConfig) -> Result<(), AppError> {
     let devices = resolve::fetch_all_devices(config.verbose).await?;
-    let app = app_view(config).await;
-    let mut list: Vec<serde_json::Value> = devices
+    let platform: Vec<crate::api::app::PlatformDevice> = devices
         .iter()
-        .map(|(info, dtype)| {
-            let mut row = json!({
-                "name": info.name(),
-                "device": info.id(),
-                "sku": info.model(),
-                "type": dtype.display_name(),
-                "category": dtype.category(),
-                // Listed by the Platform API, so the cloud can reach it.
-                "connectivity": "wifi",
-            });
-            if let Some(app) = &app {
-                if let Some(a) = app.iter().find(|a| a.device == info.id()) {
-                    row["room"] = json!(a.room);
-                }
-            }
-            row
+        .map(|(info, dtype)| crate::api::app::PlatformDevice {
+            device: info.id().to_string(),
+            sku: info.model().to_string(),
+            name: info.name().to_string(),
+            kind: dtype.display_name().to_string(),
+            category: dtype.category().to_string(),
         })
         .collect();
-    // Devices only the app knows: Bluetooth-only, controllable from a phone
-    // next to them and nowhere else.
-    if let Some(app) = &app {
-        for a in app.iter().filter(|a| a.connectivity == "bluetooth") {
-            if !devices.iter().any(|(info, _)| info.id() == a.device) {
-                list.push(json!({
-                    "name": a.name,
-                    "device": a.device,
-                    "sku": a.sku,
-                    "type": "bluetooth-only",
-                    "category": "app-only",
-                    "connectivity": "bluetooth",
-                    "room": a.room,
-                }));
-            }
-        }
-    }
-
-    print_output(&json!(list), config.output_mode);
+    let app = app_view_or_warn(config).await;
+    let rows = crate::api::app::merge_app_view(&platform, app.as_deref());
+    print_output(&json!(rows), config.output_mode);
     Ok(())
 }
 
