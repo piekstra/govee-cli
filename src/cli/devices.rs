@@ -96,7 +96,7 @@ async fn handle_get(device: &str, config: &RuntimeConfig) -> Result<(), AppError
         })
         .collect();
 
-    let app = app_view(config).await;
+    let app = app_view_or_warn(config).await;
     let room = app.as_ref().and_then(|a| {
         a.iter()
             .find(|x| x.device == dev.device_id())
