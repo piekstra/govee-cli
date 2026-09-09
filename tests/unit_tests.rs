@@ -506,6 +506,7 @@ mod app_view {
                 device: "AA".into(),
                 name: "Wifi Lamp".into(),
                 room: Some("Office".into()),
+                room_id: Some(1),
                 connectivity: Connectivity::Wifi,
             },
             AppDevice {
@@ -513,6 +514,7 @@ mod app_view {
                 device: "CC".into(),
                 name: "BT Strip".into(),
                 room: Some("Office".into()),
+                room_id: Some(1),
                 connectivity: Connectivity::Bluetooth,
             },
         ];
@@ -529,5 +531,162 @@ mod app_view {
             serde_json::to_value(Connectivity::Bluetooth).unwrap(),
             json!("bluetooth")
         );
+    }
+}
+
+mod room_writes {
+    use govee::api::app::{app_devices, AppDevice, Connectivity};
+    use govee::cli::rooms::{
+        find_device, find_room, members_of, membership_with, placed_in, rooms_of,
+        validate_room_name, Room,
+    };
+    use govee::error::AppError;
+    use govee::resolve::pick;
+    use serde_json::json;
+
+    fn rooms() -> Vec<Room> {
+        vec![
+            Room {
+                id: 1,
+                name: "Office".into(),
+            },
+            Room {
+                id: 2,
+                name: "Living Room".into(),
+            },
+            Room {
+                id: 3,
+                name: "Guest Bathroom".into(),
+            },
+            Room {
+                id: 4,
+                name: "Bathroom".into(),
+            },
+        ]
+    }
+
+    fn dev(device: &str, name: &str, room_id: Option<i64>) -> AppDevice {
+        AppDevice {
+            sku: "H6076".into(),
+            device: device.into(),
+            name: name.into(),
+            room: room_id.map(|i| format!("room{i}")),
+            room_id,
+            connectivity: Connectivity::Wifi,
+        }
+    }
+
+    #[test]
+    fn pick_follows_the_documented_order_and_names_ambiguity() {
+        let r = rooms();
+        assert_eq!(find_room(&r, "Office").unwrap().id, 1);
+        assert_eq!(find_room(&r, "2").unwrap().id, 2);
+        assert_eq!(find_room(&r, "living room").unwrap().id, 2);
+        assert_eq!(find_room(&r, "guest").unwrap().id, 3);
+        // An exact case-insensitive match wins before partials get a say.
+        assert_eq!(find_room(&r, "bathroom").unwrap().id, 4);
+        assert!(matches!(
+            find_room(&r, "attic"),
+            Err(AppError::DeviceNotFound(_))
+        ));
+        assert!(matches!(
+            find_room(&r, "room"),
+            Err(AppError::DeviceNotFound(_))
+        ));
+        let twins = vec![
+            Room {
+                id: 9,
+                name: "Den".into(),
+            },
+            Room {
+                id: 10,
+                name: "Den".into(),
+            },
+        ];
+        assert!(matches!(
+            find_room(&twins, "Den"),
+            Err(AppError::DeviceNotFound(_))
+        ));
+        // Duplicate ids are ambiguous too, never a silent first pick.
+        let dup_ids = vec![
+            Room {
+                id: 7,
+                name: "A".into(),
+            },
+            Room {
+                id: 7,
+                name: "B".into(),
+            },
+        ];
+        assert!(matches!(
+            find_room(&dup_ids, "7"),
+            Err(AppError::DeviceNotFound(_))
+        ));
+        let d = vec![
+            dev("AA:BB", "Lamp", Some(1)),
+            dev("CC:DD", "Strip", Some(2)),
+        ];
+        assert_eq!(find_device(&d, "H6076_AA:BB").unwrap().device, "AA:BB");
+        assert_eq!(find_device(&d, "h6076_aa:bb").unwrap().device, "AA:BB");
+        assert_eq!(find_device(&d, "CC:DD").unwrap().name, "Strip");
+        assert_eq!(find_device(&d, "lamp").unwrap().device, "AA:BB");
+        assert_eq!(
+            pick(
+                &d,
+                "Strip",
+                |x| vec![x.device.clone()],
+                |x| &x.name,
+                "device"
+            )
+            .unwrap()
+            .device,
+            "CC:DD"
+        );
+    }
+
+    #[test]
+    fn membership_is_keyed_by_group_id_not_name() {
+        let d = vec![
+            dev("AA", "A", Some(1)),
+            dev("BB", "B", Some(1)),
+            dev("CC", "C", Some(2)),
+            dev("DD", "D", None),
+        ];
+        let m = members_of(&d, 1);
+        assert_eq!(
+            m.iter().map(|(x, _)| x.as_str()).collect::<Vec<_>>(),
+            ["AA", "BB"]
+        );
+        assert_eq!(membership_with(&d, 1, &d[2]).len(), 3);
+        assert_eq!(
+            membership_with(&d, 1, &d[0]).len(),
+            2,
+            "already a member: no duplicate"
+        );
+        assert!(placed_in(&d, "AA", 1));
+        assert!(!placed_in(&d, "AA", 2));
+        assert!(!placed_in(&d, "DD", 1));
+    }
+
+    #[test]
+    fn rooms_parse_and_names_validate() {
+        let list = json!({"groups": [{"groupId": 5, "groupName": "Kitchen"}, {"groupId": "bad"}]});
+        assert_eq!(
+            rooms_of(&list),
+            vec![Room {
+                id: 5,
+                name: "Kitchen".into()
+            }]
+        );
+        assert_eq!(validate_room_name("  Storage ").unwrap(), "Storage");
+        assert!(validate_room_name("   ").is_err());
+        assert!(validate_room_name(&"x".repeat(23)).is_err());
+        let l = json!({"groups": [{"groupId": 5, "groupName": "Kitchen"}], "devices": [
+            {"device": "AA", "sku": "H1", "deviceName": "x", "groupId": 5},
+            {"device": "BB", "sku": "H1", "deviceName": "y", "groupId": 77}
+        ]});
+        let d = app_devices(&l);
+        assert_eq!(d[0].room_id, Some(5));
+        assert!(d[1].room_id.is_none() && d[1].room.is_none());
     }
 }
