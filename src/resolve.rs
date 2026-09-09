@@ -95,3 +95,62 @@ fn build_device(info: DeviceInfo, api_key: String, verbose: bool) -> Result<Devi
     let api = GoveeApi::new(api_key, verbose)?;
     Ok(Device::new(api, info, dtype))
 }
+
+/// Resolve a user-supplied reference the way [`resolve_device`] does, in
+/// this order: exact name, exact id, case-insensitive name, then a unique
+/// partial name. More than one hit at any tier (ids included) is a
+/// `DeviceNotFound` naming the candidates, the same class `resolve_device`
+/// uses for ambiguity; a silent first-pick never happens.
+pub fn pick<'a, T>(
+    items: &'a [T],
+    query: &str,
+    ids_of: impl Fn(&T) -> Vec<String>,
+    name_of: impl Fn(&T) -> &str,
+    what: &str,
+) -> Result<&'a T, AppError> {
+    let q = query.trim();
+    let ambiguous = |hits: &[&T]| {
+        AppError::DeviceNotFound(format!(
+            "Multiple {what}s match `{q}`: {}",
+            hits.iter()
+                .map(|x| format!("{} ({})", name_of(x), ids_of(x).join("/")))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    };
+    let one = |hits: Vec<&'a T>| -> Option<Result<&'a T, AppError>> {
+        match hits.len() {
+            0 => None,
+            1 => Some(Ok(hits[0])),
+            _ => Some(Err(ambiguous(&hits))),
+        }
+    };
+    if let Some(r) = one(items.iter().filter(|x| name_of(x) == q).collect()) {
+        return r;
+    }
+    let ql = q.to_lowercase();
+    if let Some(r) = one(items
+        .iter()
+        .filter(|x| ids_of(x).iter().any(|i| i.to_lowercase() == ql))
+        .collect())
+    {
+        return r;
+    }
+    if let Some(r) = one(items
+        .iter()
+        .filter(|x| name_of(x).to_lowercase() == ql)
+        .collect())
+    {
+        return r;
+    }
+    match one(items
+        .iter()
+        .filter(|x| name_of(x).to_lowercase().contains(&ql))
+        .collect())
+    {
+        Some(r) => r,
+        None => Err(AppError::DeviceNotFound(format!(
+            "no {what} matching `{q}`"
+        ))),
+    }
+}

@@ -315,62 +315,6 @@ pub struct AppDevice {
     pub connectivity: Connectivity,
 }
 
-/// Resolve a user-supplied reference the way `resolve::resolve_device`
-/// does, in this order: exact name, exact id, case-insensitive name, then a
-/// unique partial name. More than one hit at any tier is an error naming
-/// the candidates; a silent first-pick never happens.
-pub fn pick<'a, T>(
-    items: &'a [T],
-    query: &str,
-    ids_of: impl Fn(&T) -> Vec<String>,
-    name_of: impl Fn(&T) -> &str,
-    what: &str,
-) -> Result<&'a T, AppError> {
-    let q = query.trim();
-    let ambiguous = |hits: &[&T]| {
-        AppError::InvalidInput(format!(
-            "`{q}` matches more than one {what}: {}",
-            hits.iter()
-                .map(|x| format!("{} ({})", name_of(x), ids_of(x).join("/")))
-                .collect::<Vec<_>>()
-                .join("; ")
-        ))
-    };
-    let exact: Vec<&T> = items.iter().filter(|x| name_of(x) == q).collect();
-    match exact.len() {
-        1 => return Ok(exact[0]),
-        n if n > 1 => return Err(ambiguous(&exact)),
-        _ => {}
-    }
-    let ql = q.to_lowercase();
-    if let Some(x) = items
-        .iter()
-        .find(|x| ids_of(x).iter().any(|i| i.to_lowercase() == ql))
-    {
-        return Ok(x);
-    }
-    let ci: Vec<&T> = items
-        .iter()
-        .filter(|x| name_of(x).to_lowercase() == ql)
-        .collect();
-    match ci.len() {
-        1 => return Ok(ci[0]),
-        n if n > 1 => return Err(ambiguous(&ci)),
-        _ => {}
-    }
-    let partial: Vec<&T> = items
-        .iter()
-        .filter(|x| name_of(x).to_lowercase().contains(&ql))
-        .collect();
-    match partial.len() {
-        1 => Ok(partial[0]),
-        0 => Err(AppError::DeviceNotFound(format!(
-            "no {what} matching `{q}`"
-        ))),
-        _ => Err(ambiguous(&partial)),
-    }
-}
-
 /// A device row as `devices list` prints it: the Platform view joined with
 /// the app view, plus the app's Bluetooth-only devices.
 #[derive(Debug, Clone, serde::Serialize)]

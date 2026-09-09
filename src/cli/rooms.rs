@@ -5,11 +5,12 @@
 use clap::Subcommand;
 use serde_json::{json, Value};
 
-use crate::api::app::{app_devices, pick, AppDevice, Connectivity, GoveeApp};
+use crate::api::app::{app_devices, AppDevice, Connectivity, GoveeApp};
 use crate::cli::auth::load_account;
 use crate::cli::output::print_json;
 use crate::config::RuntimeConfig;
 use crate::error::AppError;
+use crate::resolve::pick;
 
 #[derive(Subcommand)]
 pub enum RoomsCommand {
@@ -108,6 +109,13 @@ pub fn membership_with(
         m.push((device.device.clone(), device.sku.clone()));
     }
     m
+}
+
+/// Whether `device` sits in `group_id` in a (re-read) device list.
+pub fn placed_in(devices: &[AppDevice], device: &str, group_id: i64) -> bool {
+    devices
+        .iter()
+        .any(|d| d.device == device && d.room_id == Some(group_id))
 }
 
 pub fn find_room<'a>(rooms: &'a [Room], q: &str) -> Result<&'a Room, AppError> {
@@ -218,16 +226,20 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
                     r.name
                 ),
             )?;
-            app.edit_room(token, r.id, &r.name, &membership_with(&devices, r.id, &d))
+            // The prompt may have blocked for a while and `edit_room` sends
+            // the room's complete membership, so compute it from a fresh read
+            // rather than the pre-prompt snapshot.
+            let fresh = app_devices(&app.device_list(token).await?);
+            app.edit_room(token, r.id, &r.name, &membership_with(&fresh, r.id, &d))
                 .await?;
             let after = app_devices(&app.device_list(token).await?);
-            let now = after.iter().find(|x| x.device == d.device);
-            if now.and_then(|x| x.room_id) != Some(r.id) {
-                return Err(accepted_but(&format!(
-                    "lists the device in {}",
-                    now.and_then(|x| x.room.clone())
-                        .unwrap_or_else(|| "no room".into())
-                )));
+            if !placed_in(&after, &d.device, r.id) {
+                let now = after
+                    .iter()
+                    .find(|x| x.device == d.device)
+                    .and_then(|x| x.room.clone())
+                    .unwrap_or_else(|| "no room".into());
+                return Err(accepted_but(&format!("lists the device in {now}")));
             }
             print_json(&json!({
                 "device": d.name,
@@ -258,7 +270,9 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
             let name = validate_room_name(name)?;
             let r = find_room(&rooms, room)?.clone();
             confirm(*force, &format!("Rename \"{}\" to \"{name}\"?", r.name))?;
-            app.edit_room(token, r.id, name, &members_of(&devices, r.id))
+            // Same full-membership write as a move: read fresh after the prompt.
+            let fresh = app_devices(&app.device_list(token).await?);
+            app.edit_room(token, r.id, name, &members_of(&fresh, r.id))
                 .await?;
             let after = rooms_of(&app.device_list(token).await?);
             if !after.iter().any(|x| x.id == r.id && x.name == name) {

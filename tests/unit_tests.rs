@@ -535,11 +535,13 @@ mod app_view {
 }
 
 mod room_writes {
-    use govee::api::app::{app_devices, pick, AppDevice, Connectivity};
+    use govee::api::app::{app_devices, AppDevice, Connectivity};
     use govee::cli::rooms::{
-        find_device, find_room, members_of, membership_with, rooms_of, validate_room_name, Room,
+        find_device, find_room, members_of, membership_with, placed_in, rooms_of,
+        validate_room_name, Room,
     };
     use govee::error::AppError;
+    use govee::resolve::pick;
     use serde_json::json;
 
     fn rooms() -> Vec<Room> {
@@ -589,7 +591,7 @@ mod room_writes {
         ));
         assert!(matches!(
             find_room(&r, "room"),
-            Err(AppError::InvalidInput(_))
+            Err(AppError::DeviceNotFound(_))
         ));
         let twins = vec![
             Room {
@@ -603,7 +605,22 @@ mod room_writes {
         ];
         assert!(matches!(
             find_room(&twins, "Den"),
-            Err(AppError::InvalidInput(_))
+            Err(AppError::DeviceNotFound(_))
+        ));
+        // Duplicate ids are ambiguous too, never a silent first pick.
+        let dup_ids = vec![
+            Room {
+                id: 7,
+                name: "A".into(),
+            },
+            Room {
+                id: 7,
+                name: "B".into(),
+            },
+        ];
+        assert!(matches!(
+            find_room(&dup_ids, "7"),
+            Err(AppError::DeviceNotFound(_))
         ));
         let d = vec![
             dev("AA:BB", "Lamp", Some(1)),
