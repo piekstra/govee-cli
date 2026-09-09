@@ -112,7 +112,18 @@ op read "op://Private/auth.govee.com/password" | govee auth login-account --stdi
 
 govee rooms list                    # rooms with device counts
 govee rooms devices                 # device-rooms/v1 (ids are SKU_MAC, as Google Home sees them), for `ghome audit --expect -`
+govee rooms move "Old Lamp" --room Storage   # asks first; --force to skip
+govee rooms create Storage
+govee rooms rename "Guest Bedroom" Gym
+govee rooms delete Loft             # only when empty
 ```
+
+Room writes use the app's own endpoints (`POST /bff-app/v1/devices/groups`,
+`PUT /bff-app/v1/group/edit` with the room's complete membership, `PUT
+/bff-app/v1/devices/groups/manage`), decoded from the Android app, and every
+write is read back from the device list before it is reported. They act on
+the Govee app's rooms only; Google Home files devices on its own (see
+`ghome`).
 
 ## Authentication
 
