@@ -36,20 +36,59 @@ pub async fn handle(cmd: &DevicesCommand, config: &RuntimeConfig) -> Result<(), 
     }
 }
 
+/// The app's view of every device, when the account is logged in: room and
+/// connectivity for cloud devices, and the Bluetooth-only devices the
+/// Platform API never lists. `None` without an account login.
+async fn app_view(config: &RuntimeConfig) -> Option<Vec<crate::api::app::AppDevice>> {
+    let session = crate::cli::auth::load_account().ok()?;
+    if session.token.is_empty() {
+        return None;
+    }
+    let app = crate::api::app::GoveeApp::new(session.client_id.clone(), config.verbose).ok()?;
+    let list = app.device_list(&session.token).await.ok()?;
+    Some(crate::api::app::app_devices(&list))
+}
+
 async fn handle_list(config: &RuntimeConfig) -> Result<(), AppError> {
     let devices = resolve::fetch_all_devices(config.verbose).await?;
-    let list: Vec<serde_json::Value> = devices
+    let app = app_view(config).await;
+    let mut list: Vec<serde_json::Value> = devices
         .iter()
         .map(|(info, dtype)| {
-            json!({
+            let mut row = json!({
                 "name": info.name(),
                 "device": info.id(),
                 "sku": info.model(),
                 "type": dtype.display_name(),
                 "category": dtype.category(),
-            })
+                // Listed by the Platform API, so the cloud can reach it.
+                "connectivity": "wifi",
+            });
+            if let Some(app) = &app {
+                if let Some(a) = app.iter().find(|a| a.device == info.id()) {
+                    row["room"] = json!(a.room);
+                }
+            }
+            row
         })
         .collect();
+    // Devices only the app knows: Bluetooth-only, controllable from a phone
+    // next to them and nowhere else.
+    if let Some(app) = &app {
+        for a in app.iter().filter(|a| a.connectivity == "bluetooth") {
+            if !devices.iter().any(|(info, _)| info.id() == a.device) {
+                list.push(json!({
+                    "name": a.name,
+                    "device": a.device,
+                    "sku": a.sku,
+                    "type": "bluetooth-only",
+                    "category": "app-only",
+                    "connectivity": "bluetooth",
+                    "room": a.room,
+                }));
+            }
+        }
+    }
 
     print_output(&json!(list), config.output_mode);
     Ok(())
@@ -69,6 +108,10 @@ async fn handle_get(device: &str, config: &RuntimeConfig) -> Result<(), AppError
         })
         .collect();
 
+    let app = app_view(config).await;
+    let room = app
+        .as_ref()
+        .and_then(|a| a.iter().find(|x| x.device == dev.device_id()).and_then(|x| x.room.clone()));
     print_output(
         &json!({
             "name": dev.name(),
@@ -76,6 +119,8 @@ async fn handle_get(device: &str, config: &RuntimeConfig) -> Result<(), AppError
             "sku": dev.sku(),
             "type": dev.device_type.display_name(),
             "category": dev.device_type.category(),
+            "connectivity": "wifi",
+            "room": room,
             "capabilities": capabilities,
         }),
         config.output_mode,

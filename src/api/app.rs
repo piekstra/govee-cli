@@ -178,3 +178,56 @@ impl GoveeApp {
         }
     }
 }
+
+/// One row of the app's device list, reduced to what the CLI needs.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AppDevice {
+    pub sku: String,
+    pub device: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
+    /// `wifi` (cloud-reachable) or `bluetooth` (app-only, never in the
+    /// cloud or in Google Home).
+    pub connectivity: &'static str,
+}
+
+/// Parse the app device list into rows, resolving groups to room names and
+/// deciding connectivity from the device's Wi-Fi settings.
+pub fn app_devices(list: &Value) -> Vec<AppDevice> {
+    let groups: Vec<(i64, String)> = list
+        .get("groups")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|g| Some((g.get("groupId")?.as_i64()?, g.get("groupName")?.as_str()?.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    list.get("devices")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| {
+                    let settings = d
+                        .pointer("/deviceExt/deviceSettings")
+                        .and_then(Value::as_str)
+                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                        .unwrap_or(Value::Null);
+                    let wifi = settings.get("wifiName").and_then(Value::as_str).is_some_and(|w| !w.is_empty())
+                        || settings.get("wifiSoftVersion").is_some();
+                    Some(AppDevice {
+                        sku: d.get("sku")?.as_str()?.to_string(),
+                        device: d.get("device")?.as_str()?.to_string(),
+                        name: d.get("deviceName").and_then(Value::as_str).unwrap_or("").to_string(),
+                        room: d
+                            .get("groupId")
+                            .and_then(Value::as_i64)
+                            .and_then(|gid| groups.iter().find(|(id, _)| *id == gid).map(|(_, n)| n.clone())),
+                        connectivity: if wifi { "wifi" } else { "bluetooth" },
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
