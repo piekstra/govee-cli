@@ -77,11 +77,22 @@ pub async fn handle(cmd: &RoomsCommand, config: &RuntimeConfig) -> Result<(), Ap
                     let mac = d.get("device")?.as_str()?;
                     let name = d.get("deviceName").and_then(Value::as_str).unwrap_or("");
                     let room = d.get("groupId").and_then(Value::as_i64).and_then(room_name)?;
+                    // Bluetooth-only devices never reach the cloud (or Google Home);
+                    // the app lists them with no Wi-Fi capability. deviceExt.deviceSettings
+                    // is a JSON string carrying `wifiName` for Wi-Fi devices.
+                    let settings = d
+                        .pointer("/deviceExt/deviceSettings")
+                        .and_then(Value::as_str)
+                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                        .unwrap_or(Value::Null);
+                    let wifi = settings.get("wifiName").and_then(Value::as_str).is_some_and(|w| !w.is_empty())
+                        || settings.get("wifiSoftVersion").is_some();
                     Some(json!({
                         "id": format!("{sku}_{mac}"),
                         "name": name,
                         "room": room,
                         "source": "govee",
+                        "cloud": wifi,
                     }))
                 })
                 .collect();
