@@ -64,6 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # rustsec/audit-check publishes its report through the Checks API.
+      checks: write
       pull-requests: write
       security-events: write
     steps:
