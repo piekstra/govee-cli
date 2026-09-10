@@ -1,103 +1,105 @@
 use clap::Subcommand;
+use pk_cli_core::CliError;
 use serde_json::json;
 
-use crate::cli::output::{print_json, print_output};
-use crate::config::RuntimeConfig;
+use super::output::{emit_list, emit_one};
+use super::Ctx;
 use crate::error::AppError;
 use crate::resolve;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum ToggleCommand {
-    /// Toggle gradient mode on or off
+    /// Gradient mode on or off.
     Gradient {
         /// Device name or ID
         device: String,
         /// "on" or "off"
         state: String,
     },
-    /// Toggle DreamView mode on or off
+    /// DreamView mode on or off.
     Dreamview {
         /// Device name or ID
         device: String,
         /// "on" or "off"
         state: String,
     },
-    /// List available toggles for a device
+    /// The toggles a device offers (toggle-list/v1).
+    #[command(visible_alias = "ls")]
     List {
         /// Device name or ID
         device: String,
     },
 }
 
-pub async fn handle(cmd: &ToggleCommand, config: &RuntimeConfig) -> Result<(), AppError> {
-    match cmd {
-        ToggleCommand::Gradient { device, state } => handle_gradient(device, state, config).await,
-        ToggleCommand::Dreamview { device, state } => handle_dreamview(device, state, config).await,
-        ToggleCommand::List { device } => handle_list(device, config).await,
-    }
-}
-
-fn parse_on_off(state: &str) -> Result<bool, AppError> {
+pub fn parse_on_off(state: &str) -> Result<bool, AppError> {
     match state.to_lowercase().as_str() {
         "on" | "1" | "true" => Ok(true),
         "off" | "0" | "false" => Ok(false),
         _ => Err(AppError::InvalidInput(format!(
-            "Invalid state '{}'. Use 'on' or 'off'",
-            state
+            "invalid state `{state}`: use `on` or `off`"
         ))),
     }
 }
 
-async fn handle_gradient(
-    device: &str,
-    state: &str,
-    config: &RuntimeConfig,
-) -> Result<(), AppError> {
-    let on = parse_on_off(state)?;
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    dev.set_gradient(on).await?;
-    print_json(&json!({
-        "device": dev.name(),
-        "gradient": if on { "on" } else { "off" },
-    }));
+/// Argument checks that need no credential (exit 2 before the keychain).
+pub fn validate(cmd: &ToggleCommand) -> Result<(), CliError> {
+    match cmd {
+        ToggleCommand::Gradient { state, .. } | ToggleCommand::Dreamview { state, .. } => {
+            parse_on_off(state)?;
+        }
+        ToggleCommand::List { .. } => {}
+    }
     Ok(())
 }
 
-async fn handle_dreamview(
-    device: &str,
-    state: &str,
-    config: &RuntimeConfig,
-) -> Result<(), AppError> {
-    let on = parse_on_off(state)?;
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    dev.set_dreamview(on).await?;
-    print_json(&json!({
-        "device": dev.name(),
-        "dreamview": if on { "on" } else { "off" },
-    }));
+pub async fn handle(ctx: &Ctx, cmd: &ToggleCommand) -> Result<(), CliError> {
+    validate(cmd)?;
+    let api = ctx.api()?;
+    match cmd {
+        ToggleCommand::Gradient { device, state } => {
+            let on = parse_on_off(state)?;
+            let dev = resolve::resolve_device(&api, device).await?;
+            dev.set_gradient(on).await?;
+            emit_one(
+                ctx.json,
+                "toggle",
+                json!({ "device": dev.name(), "gradient": on_off(on) }),
+            );
+        }
+        ToggleCommand::Dreamview { device, state } => {
+            let on = parse_on_off(state)?;
+            let dev = resolve::resolve_device(&api, device).await?;
+            dev.set_dreamview(on).await?;
+            emit_one(
+                ctx.json,
+                "toggle",
+                json!({ "device": dev.name(), "dreamview": on_off(on) }),
+            );
+        }
+        ToggleCommand::List { device } => {
+            let dev = resolve::resolve_device(&api, device).await?;
+            let items: Vec<serde_json::Value> = dev
+                .info
+                .capabilities
+                .iter()
+                .filter(|c| c.capability_type == "devices.capabilities.toggle")
+                .map(|c| json!({ "toggle": c.instance }))
+                .collect();
+            emit_list(
+                ctx.json,
+                "toggle-list",
+                json!({ "device": dev.name(), "items": items }),
+                &["toggle"],
+            );
+        }
+    }
     Ok(())
 }
 
-async fn handle_list(device: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    let toggles: Vec<serde_json::Value> = dev
-        .info
-        .capabilities
-        .iter()
-        .filter(|c| c.capability_type == "devices.capabilities.toggle")
-        .map(|c| {
-            json!({
-                "toggle": c.instance,
-            })
-        })
-        .collect();
-
-    print_output(
-        &json!({
-            "device": dev.name(),
-            "toggles": toggles,
-        }),
-        config.output_mode,
-    );
-    Ok(())
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
 }

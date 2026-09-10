@@ -364,14 +364,14 @@ fn device_info_no_capabilities() {
 fn device_info_deserialization() {
     let info: govee::models::device_info::DeviceInfo = serde_json::from_value(json!({
         "sku": "H60B0",
-        "device": "14:DF:DD:99:83:06:19:44",
-        "deviceName": "Living Room Light 1",
+        "device": "AA:BB:CC:DD:EE:FF:00:11",
+        "deviceName": "Office Floor Lamp",
         "capabilities": []
     }))
     .unwrap();
 
-    assert_eq!(info.name(), "Living Room Light 1");
-    assert_eq!(info.id(), "14:DF:DD:99:83:06:19:44");
+    assert_eq!(info.name(), "Office Floor Lamp");
+    assert_eq!(info.id(), "AA:BB:CC:DD:EE:FF:00:11");
     assert_eq!(info.model(), "H60B0");
 }
 
@@ -422,36 +422,95 @@ fn capability_type_unknown_preserved() {
     assert_eq!(parsed.api_type(), "devices.capabilities.future_thing");
 }
 
-// -- Error type tests --
+// -- Error mapping tests (the family exit-code contract, SPEC §1.5) --
 
 #[test]
-fn error_exit_codes() {
+fn errors_map_to_the_family_exit_codes() {
     use govee::error::AppError;
-    assert_eq!(AppError::NotAuthenticated.exit_code(), 2);
-    assert_eq!(AppError::DeviceNotFound("x".into()).exit_code(), 3);
-    assert_eq!(AppError::RateLimited("x".into()).exit_code(), 4);
-    assert_eq!(AppError::InvalidInput("x".into()).exit_code(), 1);
+    use pk_cli_core::CliError;
+    let code = |e: AppError| CliError::from(e).exit_code();
+    assert_eq!(code(AppError::NotAuthenticated), 3);
+    assert_eq!(code(AppError::AccountNotAuthenticated), 3);
+    assert_eq!(code(AppError::DeviceNotFound("x".into())), 4);
+    assert_eq!(code(AppError::RateLimited("x".into())), 5);
+    assert_eq!(
+        code(AppError::Api {
+            message: "x".into(),
+            error_code: Some(500)
+        }),
+        5
+    );
+    assert_eq!(code(AppError::InvalidInput("x".into())), 2);
+    assert_eq!(code(AppError::UnsupportedOperation("x".into())), 2);
 }
 
 #[test]
 fn error_json_format() {
     use govee::error::AppError;
-    let err = AppError::DeviceNotFound("My Lamp".into());
-    let j = err.to_json();
-    assert_eq!(j["error"], "device_not_found");
-    assert!(j["message"].as_str().unwrap().contains("My Lamp"));
+    use pk_cli_core::CliError;
+    let j = CliError::from(AppError::DeviceNotFound("My Lamp".into())).to_json();
+    assert_eq!(j["error"]["code"], "not_found");
+    assert!(j["error"]["message"].as_str().unwrap().contains("My Lamp"));
 }
 
 #[test]
 fn error_api_includes_error_code() {
     use govee::error::AppError;
-    let err = AppError::Api {
+    use pk_cli_core::CliError;
+    let j = CliError::from(AppError::Api {
         message: "Bad request".into(),
         error_code: Some(400),
-    };
-    let j = err.to_json();
-    assert_eq!(j["error"], "api");
-    assert_eq!(j["error_code"], 400);
+    })
+    .to_json();
+    assert_eq!(j["error"]["code"], "upstream");
+    let msg = j["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("Bad request") && msg.contains("400"));
+}
+
+#[test]
+fn auth_errors_point_at_the_right_login_command() {
+    use govee::error::AppError;
+    use pk_cli_core::CliError;
+    assert!(CliError::from(AppError::NotAuthenticated)
+        .to_string()
+        .contains("auth login"));
+    assert!(CliError::from(AppError::AccountNotAuthenticated)
+        .to_string()
+        .contains("auth login-account"));
+}
+
+// -- Control argument validation (exit 2 before any credential) --
+
+#[test]
+fn control_values_validate_before_any_network() {
+    use govee::models::device::{validate_brightness, validate_color_temp, validate_sensitivity};
+    assert!(validate_brightness(0).is_err());
+    assert!(validate_brightness(1).is_ok());
+    assert!(validate_brightness(100).is_ok());
+    assert!(validate_brightness(101).is_err());
+    assert!(validate_color_temp(1999).is_err());
+    assert!(validate_color_temp(2000).is_ok());
+    assert!(validate_color_temp(9000).is_ok());
+    assert!(validate_color_temp(9001).is_err());
+    assert!(validate_sensitivity(100).is_ok());
+    assert!(validate_sensitivity(101).is_err());
+    assert!(govee::cli::toggle::parse_on_off("ON").unwrap());
+    assert!(!govee::cli::toggle::parse_on_off("0").unwrap());
+    assert!(govee::cli::toggle::parse_on_off("maybe").is_err());
+}
+
+#[test]
+fn power_state_is_read_from_the_power_switch_capability() {
+    use govee::cli::power::find_power_state;
+    let on = json!({"capabilities": [
+        {"type": "devices.capabilities.on_off", "instance": "powerSwitch", "state": {"value": 1}}
+    ]});
+    let off = json!({"capabilities": [
+        {"type": "devices.capabilities.on_off", "instance": "powerSwitch", "state": {"value": 0}}
+    ]});
+    assert!(find_power_state(&on));
+    assert!(!find_power_state(&off));
+    assert!(!find_power_state(&json!({})));
 }
 
 mod app_view {

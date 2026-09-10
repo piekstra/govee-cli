@@ -1,12 +1,17 @@
+//! The Govee Platform API (the public developer API). Auth is the
+//! `Govee-API-Key` header; every response is an envelope
+//! `{code, message|msg, data|payload}` where `code` is the real status.
+
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::AppError;
 
-const BASE_URL: &str = "https://openapi.api.govee.com/router/api/v1";
+pub const BASE_URL: &str = "https://openapi.api.govee.com/router/api/v1";
 
+#[derive(Clone)]
 pub struct GoveeApi {
     client: reqwest::Client,
     api_key: String,
@@ -19,13 +24,13 @@ struct ApiResponse {
     #[serde(alias = "msg")]
     message: Option<String>,
     #[serde(default)]
-    data: Option<serde_json::Value>,
+    data: Option<Value>,
     #[serde(default)]
-    payload: Option<serde_json::Value>,
+    payload: Option<Value>,
 }
 
 impl ApiResponse {
-    fn into_result(self) -> Result<serde_json::Value, AppError> {
+    fn into_result(self) -> Result<Value, AppError> {
         if self.code == 200 {
             if let Some(data) = self.data {
                 return Ok(data);
@@ -39,7 +44,7 @@ impl ApiResponse {
                 .message
                 .unwrap_or_else(|| format!("API error code {}", self.code));
             Err(match self.code {
-                401 => AppError::NotAuthenticated,
+                401 | 403 => AppError::NotAuthenticated,
                 429 => AppError::RateLimited(message),
                 _ => AppError::Api {
                     message,
@@ -51,8 +56,11 @@ impl ApiResponse {
 }
 
 impl GoveeApi {
+    /// `api_key` is the raw key; it is only ever placed in the request
+    /// header and never logged.
     pub fn new(api_key: String, verbose: bool) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
+            .user_agent(format!("{}/{}", crate::BIN, env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(15))
             .build()?;
         Ok(Self {
@@ -79,24 +87,41 @@ impl GoveeApi {
         if self.verbose {
             if let Some(v) = response.headers().get("API-RateLimit-Remaining") {
                 eprintln!(
-                    "[verbose] Per-minute rate limit remaining: {}",
+                    "[verbose] per-minute rate limit remaining: {}",
                     v.to_str().unwrap_or("?")
                 );
             }
             if let Some(v) = response.headers().get("X-RateLimit-Remaining") {
                 eprintln!(
-                    "[verbose] Daily rate limit remaining: {}",
+                    "[verbose] daily rate limit remaining: {}",
                     v.to_str().unwrap_or("?")
                 );
             }
         }
     }
 
-    /// GET /user/devices - list all devices
-    pub async fn get_devices(&self) -> Result<serde_json::Value, AppError> {
-        let url = format!("{}/user/devices", BASE_URL);
+    async fn post(&self, path: &str, body: Value) -> Result<Value, AppError> {
+        let url = format!("{BASE_URL}{path}");
         if self.verbose {
-            eprintln!("[verbose] GET {}", url);
+            eprintln!("[verbose] POST {url}");
+        }
+        let response = self
+            .client
+            .post(&url)
+            .headers(self.headers())
+            .json(&body)
+            .send()
+            .await?;
+        self.log_rate_limits(&response);
+        let api_response: ApiResponse = response.json().await?;
+        api_response.into_result()
+    }
+
+    /// GET /user/devices — every device on the account with its capabilities.
+    pub async fn get_devices(&self) -> Result<Value, AppError> {
+        let url = format!("{BASE_URL}/user/devices");
+        if self.verbose {
+            eprintln!("[verbose] GET {url}");
         }
         let response = self.client.get(&url).headers(self.headers()).send().await?;
         self.log_rate_limits(&response);
@@ -104,16 +129,15 @@ impl GoveeApi {
         api_response.into_result()
     }
 
-    /// POST /device/control - control a device
+    /// POST /device/control — set one capability instance.
     pub async fn control_device(
         &self,
         sku: &str,
         device: &str,
         cap_type: &str,
         instance: &str,
-        value: serde_json::Value,
+        value: Value,
     ) -> Result<(), AppError> {
-        let url = format!("{}/device/control", BASE_URL);
         let body = json!({
             "requestId": Self::request_id(),
             "payload": {
@@ -127,100 +151,81 @@ impl GoveeApi {
             }
         });
         if self.verbose {
-            eprintln!("[verbose] POST {}", url);
             eprintln!(
-                "[verbose] Body: {}",
-                serde_json::to_string_pretty(&body).unwrap_or_default()
+                "[verbose] body: {}",
+                serde_json::to_string(&body).unwrap_or_default()
             );
         }
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.headers())
-            .json(&body)
-            .send()
-            .await?;
-        self.log_rate_limits(&response);
-        let api_response: ApiResponse = response.json().await?;
-        api_response.into_result()?;
+        self.post("/device/control", body).await?;
         Ok(())
     }
 
-    /// POST /device/state - query device state
-    pub async fn get_device_state(
-        &self,
-        sku: &str,
-        device: &str,
-    ) -> Result<serde_json::Value, AppError> {
-        let url = format!("{}/device/state", BASE_URL);
-        let body = json!({
-            "requestId": Self::request_id(),
-            "payload": { "sku": sku, "device": device }
-        });
-        if self.verbose {
-            eprintln!("[verbose] POST {}", url);
-        }
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.headers())
-            .json(&body)
-            .send()
-            .await?;
-        self.log_rate_limits(&response);
-        let api_response: ApiResponse = response.json().await?;
-        api_response.into_result()
+    /// POST /device/state — current capability values.
+    pub async fn get_device_state(&self, sku: &str, device: &str) -> Result<Value, AppError> {
+        self.post("/device/state", Self::device_body(sku, device))
+            .await
     }
 
-    /// POST /device/scenes - list available scenes
-    pub async fn get_device_scenes(
-        &self,
-        sku: &str,
-        device: &str,
-    ) -> Result<serde_json::Value, AppError> {
-        let url = format!("{}/device/scenes", BASE_URL);
-        let body = json!({
-            "requestId": Self::request_id(),
-            "payload": { "sku": sku, "device": device }
-        });
-        if self.verbose {
-            eprintln!("[verbose] POST {}", url);
-        }
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.headers())
-            .json(&body)
-            .send()
-            .await?;
-        self.log_rate_limits(&response);
-        let api_response: ApiResponse = response.json().await?;
-        api_response.into_result()
+    /// POST /device/scenes — the dynamic (and snapshot) scenes a device offers.
+    pub async fn get_device_scenes(&self, sku: &str, device: &str) -> Result<Value, AppError> {
+        self.post("/device/scenes", Self::device_body(sku, device))
+            .await
     }
 
-    /// POST /device/diy-scenes - list DIY scenes
-    pub async fn get_device_diy_scenes(
-        &self,
-        sku: &str,
-        device: &str,
-    ) -> Result<serde_json::Value, AppError> {
-        let url = format!("{}/device/diy-scenes", BASE_URL);
-        let body = json!({
+    /// POST /device/diy-scenes — user-created DIY scenes.
+    pub async fn get_device_diy_scenes(&self, sku: &str, device: &str) -> Result<Value, AppError> {
+        self.post("/device/diy-scenes", Self::device_body(sku, device))
+            .await
+    }
+
+    fn device_body(sku: &str, device: &str) -> Value {
+        json!({
             "requestId": Self::request_id(),
             "payload": { "sku": sku, "device": device }
-        });
-        if self.verbose {
-            eprintln!("[verbose] POST {}", url);
-        }
-        let response = self
-            .client
-            .post(&url)
-            .headers(self.headers())
-            .json(&body)
-            .send()
-            .await?;
-        self.log_rate_limits(&response);
-        let api_response: ApiResponse = response.json().await?;
-        api_response.into_result()
+        })
     }
+
+    /// Raw passthrough for `govee api`: the response body as-is (envelope
+    /// included), with the HTTP status mapped onto the exit-code contract.
+    pub async fn raw(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<Value>,
+    ) -> Result<Value, AppError> {
+        if self.verbose {
+            eprintln!("[verbose] {method} {url}");
+        }
+        let mut req = self.client.request(method, url).headers(self.headers());
+        if let Some(b) = body {
+            req = req.json(&b);
+        }
+        let response = req.send().await?;
+        self.log_rate_limits(&response);
+        let status = response.status();
+        let text = response.text().await?;
+        if self.verbose {
+            eprintln!("[verbose] HTTP {} ({} bytes)", status.as_u16(), text.len());
+        }
+        match status.as_u16() {
+            401 | 403 => return Err(AppError::NotAuthenticated),
+            404 => return Err(AppError::DeviceNotFound(format!("HTTP 404 for {url}"))),
+            429 => return Err(AppError::RateLimited(snippet(&text))),
+            s if !status.is_success() => {
+                return Err(AppError::Api {
+                    message: format!("HTTP {s}: {}", snippet(&text)),
+                    error_code: Some(s as i32),
+                })
+            }
+            _ => {}
+        }
+        serde_json::from_str(&text).map_err(|_| AppError::Api {
+            message: format!("non-JSON response: {}", snippet(&text)),
+            error_code: None,
+        })
+    }
+}
+
+fn snippet(text: &str) -> String {
+    text.chars().take(200).collect()
 }

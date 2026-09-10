@@ -1,14 +1,9 @@
 use clap::Parser;
+use pk_cli_core::output;
 
-use govee::cli::output::print_error;
-use govee::cli::Cli;
-
-#[tokio::main]
-async fn main() {
-    let args = Cli::parse();
-
-    if let Err(e) = govee::run(args).await {
-        print_error(&e);
-        std::process::exit(e.exit_code());
+fn main() {
+    let cli = govee::cli::Cli::parse();
+    if let Err(e) = govee::run(&cli) {
+        std::process::exit(output::fail(&e, cli.common.json));
     }
 }

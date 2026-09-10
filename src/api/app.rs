@@ -85,7 +85,7 @@ impl GoveeApp {
     ) -> Result<Value, AppError> {
         let url = format!("{BASE}{path}");
         if self.verbose {
-            eprintln!("{method} {url}");
+            eprintln!("[verbose] {method} {url}");
         }
         let resp = self
             .client
@@ -97,7 +97,7 @@ impl GoveeApp {
         let status = resp.status();
         let text = resp.text().await?;
         if self.verbose {
-            eprintln!("HTTP {} ({} bytes)", status.as_u16(), text.len());
+            eprintln!("[verbose] HTTP {} ({} bytes)", status.as_u16(), text.len());
         }
         serde_json::from_str(&text).map_err(|_| AppError::Api {
             message: format!(
@@ -187,7 +187,7 @@ impl GoveeApp {
             .await?;
         match v.get("status").and_then(Value::as_i64) {
             Some(200) => Ok(v),
-            Some(401) | Some(403) => Err(AppError::NotAuthenticated),
+            Some(401) | Some(403) => Err(AppError::AccountNotAuthenticated),
             other => Err(AppError::Api {
                 message: format!(
                     "device list failed: {}",
@@ -204,7 +204,7 @@ impl GoveeApp {
 fn status_ok(v: &Value, what: &str) -> Result<(), AppError> {
     match v.get("status").and_then(Value::as_i64) {
         Some(200) => Ok(()),
-        Some(401) | Some(403) => Err(AppError::NotAuthenticated),
+        Some(401) | Some(403) => Err(AppError::AccountNotAuthenticated),
         other => Err(AppError::Api {
             message: format!(
                 "{what}: {}",

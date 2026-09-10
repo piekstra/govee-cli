@@ -1,89 +1,77 @@
 use clap::Subcommand;
+use pk_cli_core::CliError;
 use serde_json::json;
 
-use crate::cli::output::print_json;
-use crate::config::RuntimeConfig;
-use crate::error::AppError;
+use super::output::emit_one;
+use super::Ctx;
 use crate::resolve;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum PowerCommand {
-    /// Turn device on
+    /// Turn a device on.
     On {
         /// Device name or ID
         device: String,
     },
-    /// Turn device off
+    /// Turn a device off.
     Off {
         /// Device name or ID
         device: String,
     },
-    /// Toggle device power
+    /// Flip a device's power.
     Toggle {
         /// Device name or ID
         device: String,
     },
-    /// Get device power status
+    /// Report whether a device is on.
     Status {
         /// Device name or ID
         device: String,
     },
 }
 
-pub async fn handle(cmd: &PowerCommand, config: &RuntimeConfig) -> Result<(), AppError> {
-    match cmd {
+pub async fn handle(ctx: &Ctx, cmd: &PowerCommand) -> Result<(), CliError> {
+    let api = ctx.api()?;
+    let payload = match cmd {
         PowerCommand::On { device } => {
-            let dev = resolve::resolve_device(device, config.verbose).await?;
+            let dev = resolve::resolve_device(&api, device).await?;
             dev.power_on().await?;
-            print_json(&json!({
-                "device": dev.name(),
-                "power": "on",
-            }));
+            json!({ "device": dev.name(), "power": "on" })
         }
         PowerCommand::Off { device } => {
-            let dev = resolve::resolve_device(device, config.verbose).await?;
+            let dev = resolve::resolve_device(&api, device).await?;
             dev.power_off().await?;
-            print_json(&json!({
-                "device": dev.name(),
-                "power": "off",
-            }));
+            json!({ "device": dev.name(), "power": "off" })
         }
         PowerCommand::Toggle { device } => {
-            let dev = resolve::resolve_device(device, config.verbose).await?;
-            // Query current state, then toggle
+            let dev = resolve::resolve_device(&api, device).await?;
             let state = dev.get_state().await?;
             let is_on = find_power_state(&state);
             if is_on {
                 dev.power_off().await?;
-                print_json(&json!({
-                    "device": dev.name(),
-                    "power": "off",
-                    "toggled_from": "on",
-                }));
             } else {
                 dev.power_on().await?;
-                print_json(&json!({
-                    "device": dev.name(),
-                    "power": "on",
-                    "toggled_from": "off",
-                }));
             }
+            json!({
+                "device": dev.name(),
+                "power": if is_on { "off" } else { "on" },
+                "toggled_from": if is_on { "on" } else { "off" },
+            })
         }
         PowerCommand::Status { device } => {
-            let dev = resolve::resolve_device(device, config.verbose).await?;
+            let dev = resolve::resolve_device(&api, device).await?;
             let state = dev.get_state().await?;
             let is_on = find_power_state(&state);
-            print_json(&json!({
-                "device": dev.name(),
-                "power": if is_on { "on" } else { "off" },
-            }));
+            json!({ "device": dev.name(), "power": if is_on { "on" } else { "off" } })
         }
-    }
+    };
+    emit_one(ctx.json, "power", payload);
     Ok(())
 }
 
-fn find_power_state(state: &serde_json::Value) -> bool {
-    // State payload has "capabilities" array with current values
+/// The `powerSwitch` value out of a `/device/state` payload; absent counts
+/// as off.
+pub fn find_power_state(state: &serde_json::Value) -> bool {
     if let Some(capabilities) = state.get("capabilities").and_then(|v| v.as_array()) {
         for cap in capabilities {
             let cap_type = cap.get("type").and_then(|v| v.as_str()).unwrap_or("");

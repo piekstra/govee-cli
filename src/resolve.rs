@@ -1,5 +1,7 @@
+//! Device resolution: the Platform device list, and the name/id ladder every
+//! command uses to turn a user-supplied reference into one device.
+
 use crate::api::client::GoveeApi;
-use crate::auth::api_key::get_api_key;
 use crate::error::AppError;
 use crate::models::device::Device;
 use crate::models::device_info::DeviceInfo;
@@ -15,13 +17,10 @@ fn parse_devices(data: &serde_json::Value) -> Vec<DeviceInfo> {
     }
 }
 
-/// Fetch all devices from the Govee API.
-pub async fn fetch_all_devices(verbose: bool) -> Result<Vec<(DeviceInfo, DeviceType)>, AppError> {
-    let api_key = get_api_key()?;
-    let api = GoveeApi::new(api_key, verbose)?;
+/// Fetch all devices from the Platform API.
+pub async fn fetch_all_devices(api: &GoveeApi) -> Result<Vec<(DeviceInfo, DeviceType)>, AppError> {
     let data = api.get_devices().await?;
-    let devices = parse_devices(&data);
-    Ok(devices
+    Ok(parse_devices(&data)
         .into_iter()
         .map(|info| {
             let dtype = DeviceType::from_sku(&info.sku);
@@ -37,16 +36,13 @@ pub async fn fetch_all_devices(verbose: bool) -> Result<Vec<(DeviceInfo, DeviceT
 /// 2. Exact device ID match
 /// 3. Case-insensitive name match
 /// 4. Partial name match (only if exactly one result)
-pub async fn resolve_device(name_or_id: &str, verbose: bool) -> Result<Device, AppError> {
-    let api_key = get_api_key()?;
-    let api = GoveeApi::new(api_key.clone(), verbose)?;
+pub async fn resolve_device(api: &GoveeApi, name_or_id: &str) -> Result<Device, AppError> {
     let data = api.get_devices().await?;
     let all_devices = parse_devices(&data);
 
     if all_devices.is_empty() {
         return Err(AppError::DeviceNotFound(format!(
-            "No devices found. Is '{}' correct?",
-            name_or_id
+            "no devices on the account; is `{name_or_id}` correct?"
         )));
     }
 
@@ -54,12 +50,12 @@ pub async fn resolve_device(name_or_id: &str, verbose: bool) -> Result<Device, A
 
     // 1. Exact name match
     if let Some(info) = all_devices.iter().find(|d| d.name() == name_or_id) {
-        return build_device(info.clone(), api_key, verbose);
+        return Ok(build_device(api, info.clone()));
     }
 
     // 2. Exact device ID match
     if let Some(info) = all_devices.iter().find(|d| d.id() == name_or_id) {
-        return build_device(info.clone(), api_key, verbose);
+        return Ok(build_device(api, info.clone()));
     }
 
     // 3. Case-insensitive name match
@@ -67,7 +63,7 @@ pub async fn resolve_device(name_or_id: &str, verbose: bool) -> Result<Device, A
         .iter()
         .find(|d| d.name().to_lowercase() == name_lower)
     {
-        return build_device(info.clone(), api_key, verbose);
+        return Ok(build_device(api, info.clone()));
     }
 
     // 4. Partial match (unambiguous only)
@@ -77,23 +73,23 @@ pub async fn resolve_device(name_or_id: &str, verbose: bool) -> Result<Device, A
         .collect();
 
     match partial.len() {
-        1 => build_device(partial[0].clone(), api_key, verbose),
-        0 => Err(AppError::DeviceNotFound(name_or_id.to_string())),
+        1 => Ok(build_device(api, partial[0].clone())),
+        0 => Err(AppError::DeviceNotFound(format!(
+            "no device matching `{name_or_id}`"
+        ))),
         _ => {
             let names: Vec<String> = partial.iter().map(|d| d.name().to_string()).collect();
             Err(AppError::DeviceNotFound(format!(
-                "Multiple devices match '{}': {}",
-                name_or_id,
+                "multiple devices match `{name_or_id}`: {}",
                 names.join(", ")
             )))
         }
     }
 }
 
-fn build_device(info: DeviceInfo, api_key: String, verbose: bool) -> Result<Device, AppError> {
+fn build_device(api: &GoveeApi, info: DeviceInfo) -> Device {
     let dtype = DeviceType::from_sku(&info.sku);
-    let api = GoveeApi::new(api_key, verbose)?;
-    Ok(Device::new(api, info, dtype))
+    Device::new(api.clone(), info, dtype)
 }
 
 /// Resolve a user-supplied reference the way [`resolve_device`] does, in
@@ -111,7 +107,7 @@ pub fn pick<'a, T>(
     let q = query.trim();
     let ambiguous = |hits: &[&T]| {
         AppError::DeviceNotFound(format!(
-            "Multiple {what}s match `{q}`: {}",
+            "multiple {what}s match `{q}`: {}",
             hits.iter()
                 .map(|x| format!("{} ({})", name_of(x), ids_of(x).join("/")))
                 .collect::<Vec<_>>()

@@ -5,6 +5,36 @@ use crate::error::AppError;
 use crate::models::device_info::DeviceInfo;
 use crate::models::device_type::DeviceType;
 
+/// Brightness is 1–100 on every Govee light.
+pub fn validate_brightness(level: u8) -> Result<(), AppError> {
+    if level == 0 || level > 100 {
+        return Err(AppError::InvalidInput(
+            "brightness must be between 1 and 100".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Colour temperature is 2000–9000 K on every Govee light.
+pub fn validate_color_temp(kelvin: u16) -> Result<(), AppError> {
+    if !(2000..=9000).contains(&kelvin) {
+        return Err(AppError::InvalidInput(
+            "color temperature must be between 2000 and 9000 Kelvin".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Music-mode sensitivity is 0–100.
+pub fn validate_sensitivity(sensitivity: u8) -> Result<(), AppError> {
+    if sensitivity > 100 {
+        return Err(AppError::InvalidInput(
+            "sensitivity must be between 0 and 100".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// A resolved device ready for control operations.
 pub struct Device {
     api: GoveeApi,
@@ -64,11 +94,7 @@ impl Device {
     // -- Brightness --
 
     pub async fn set_brightness(&self, level: u8) -> Result<(), AppError> {
-        if level == 0 || level > 100 {
-            return Err(AppError::InvalidInput(
-                "Brightness must be between 1 and 100".to_string(),
-            ));
-        }
+        validate_brightness(level)?;
         self.require_capability("devices.capabilities.range", "brightness")?;
         self.api
             .control_device(
@@ -98,11 +124,7 @@ impl Device {
     }
 
     pub async fn set_color_temp(&self, kelvin: u16) -> Result<(), AppError> {
-        if !(2000..=9000).contains(&kelvin) {
-            return Err(AppError::InvalidInput(
-                "Color temperature must be between 2000 and 9000 Kelvin".to_string(),
-            ));
-        }
+        validate_color_temp(kelvin)?;
         self.require_capability("devices.capabilities.color_setting", "colorTemperatureK")?;
         self.api
             .control_device(

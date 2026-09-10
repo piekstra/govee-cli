@@ -1,108 +1,100 @@
 use clap::Subcommand;
-use serde_json::json;
+use pk_cli_core::CliError;
+use serde_json::{json, Value};
 
-use crate::cli::output::{print_json, print_output};
-use crate::config::RuntimeConfig;
+use super::output::emit_one;
+use super::Ctx;
 use crate::error::AppError;
 use crate::resolve;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum SegmentCommand {
-    /// Set per-segment colors (value as JSON matching Govee API format)
+    /// Set per-segment colors (value as JSON in the Platform API's format).
     Color {
         /// Device name or ID
         device: String,
-        /// JSON value for segment colors (e.g., '{"segment":[[0,5,16711680]]}')
+        /// JSON value for segment colors (e.g. '{"segment":[0,1,2],"rgb":16711680}')
         value: String,
     },
-    /// Set per-segment brightness (value as JSON matching Govee API format)
+    /// Set per-segment brightness (value as JSON in the Platform API's format).
     Brightness {
         /// Device name or ID
         device: String,
-        /// JSON value for segment brightness (e.g., '{"segment":[[0,5,80]]}')
+        /// JSON value for segment brightness (e.g. '{"segment":[0,1,2],"brightness":80}')
         value: String,
     },
-    /// Show segment capability info for a device
+    /// The device's segment capabilities (segment-info/v1).
     Info {
         /// Device name or ID
         device: String,
     },
 }
 
-pub async fn handle(cmd: &SegmentCommand, config: &RuntimeConfig) -> Result<(), AppError> {
+fn parse_value(value: &str) -> Result<Value, AppError> {
+    serde_json::from_str(value).map_err(|e| {
+        AppError::InvalidInput(format!(
+            "invalid JSON: {e}; see `govee segment info` for the format"
+        ))
+    })
+}
+
+/// Argument checks that need no credential (exit 2 before the keychain).
+pub fn validate(cmd: &SegmentCommand) -> Result<(), CliError> {
     match cmd {
-        SegmentCommand::Color { device, value } => handle_color(device, value, config).await,
-        SegmentCommand::Brightness { device, value } => {
-            handle_brightness(device, value, config).await
+        SegmentCommand::Color { value, .. } | SegmentCommand::Brightness { value, .. } => {
+            parse_value(value)?;
         }
-        SegmentCommand::Info { device } => handle_info(device, config).await,
+        SegmentCommand::Info { .. } => {}
     }
-}
-
-async fn handle_color(device: &str, value: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let parsed: serde_json::Value = serde_json::from_str(value).map_err(|e| {
-        AppError::InvalidInput(format!(
-            "Invalid JSON: {}. See 'govee segment info' for format",
-            e
-        ))
-    })?;
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    dev.set_segment_color(parsed).await?;
-    print_json(&json!({
-        "device": dev.name(),
-        "segment_color": "set",
-    }));
     Ok(())
 }
 
-async fn handle_brightness(
-    device: &str,
-    value: &str,
-    config: &RuntimeConfig,
-) -> Result<(), AppError> {
-    let parsed: serde_json::Value = serde_json::from_str(value).map_err(|e| {
-        AppError::InvalidInput(format!(
-            "Invalid JSON: {}. See 'govee segment info' for format",
-            e
-        ))
-    })?;
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    dev.set_segment_brightness(parsed).await?;
-    print_json(&json!({
-        "device": dev.name(),
-        "segment_brightness": "set",
-    }));
-    Ok(())
-}
-
-async fn handle_info(device: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    let segment_caps: Vec<serde_json::Value> = dev
-        .info
-        .capabilities
-        .iter()
-        .filter(|c| c.capability_type == "devices.capabilities.segment_color_setting")
-        .map(|c| {
-            json!({
-                "instance": c.instance,
-                "parameters": c.parameters,
-            })
-        })
-        .collect();
-
-    if segment_caps.is_empty() {
-        return Err(AppError::UnsupportedOperation(format!(
-            "{} does not support segment control",
-            dev.name()
-        )));
+pub async fn handle(ctx: &Ctx, cmd: &SegmentCommand) -> Result<(), CliError> {
+    validate(cmd)?;
+    let api = ctx.api()?;
+    match cmd {
+        SegmentCommand::Color { device, value } => {
+            let parsed = parse_value(value)?;
+            let dev = resolve::resolve_device(&api, device).await?;
+            dev.set_segment_color(parsed).await?;
+            emit_one(
+                ctx.json,
+                "segment-control",
+                json!({ "device": dev.name(), "segment_color": "set" }),
+            );
+        }
+        SegmentCommand::Brightness { device, value } => {
+            let parsed = parse_value(value)?;
+            let dev = resolve::resolve_device(&api, device).await?;
+            dev.set_segment_brightness(parsed).await?;
+            emit_one(
+                ctx.json,
+                "segment-control",
+                json!({ "device": dev.name(), "segment_brightness": "set" }),
+            );
+        }
+        SegmentCommand::Info { device } => {
+            let dev = resolve::resolve_device(&api, device).await?;
+            let segment_caps: Vec<Value> = dev
+                .info
+                .capabilities
+                .iter()
+                .filter(|c| c.capability_type == "devices.capabilities.segment_color_setting")
+                .map(|c| json!({ "instance": c.instance, "parameters": c.parameters }))
+                .collect();
+            if segment_caps.is_empty() {
+                return Err(AppError::UnsupportedOperation(format!(
+                    "{} does not support segment control",
+                    dev.name()
+                ))
+                .into());
+            }
+            emit_one(
+                ctx.json,
+                "segment-info",
+                json!({ "device": dev.name(), "segment_capabilities": segment_caps }),
+            );
+        }
     }
-
-    print_output(
-        &json!({
-            "device": dev.name(),
-            "segment_capabilities": segment_caps,
-        }),
-        config.output_mode,
-    );
     Ok(())
 }

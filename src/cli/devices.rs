@@ -1,126 +1,140 @@
 use clap::Subcommand;
-use serde_json::json;
+use pk_cli_core::CliError;
+use serde_json::{json, Value};
 
-use crate::cli::output::print_output;
-use crate::config::RuntimeConfig;
+use super::output::{emit_list, emit_one};
+use super::Ctx;
+use crate::api::app::{self, AppDevice, GoveeApp, PlatformDevice};
 use crate::error::AppError;
 use crate::resolve;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum DevicesCommand {
-    /// List all devices
+    /// List every device (device-list/v1); with an account signed in, rooms
+    /// and Bluetooth-only devices too.
+    #[command(visible_alias = "ls")]
     List,
-    /// Get device details
+    /// One device with its capabilities (device/v1).
     Get {
         /// Device name or ID
         device: String,
     },
-    /// Search devices by partial name
+    /// Devices whose name contains the query (device-list/v1).
     Search {
         /// Search query
         query: String,
     },
-    /// Show device capabilities in detail
+    /// Capabilities in full, parameters included (device-capabilities/v1).
     Caps {
         /// Device name or ID
         device: String,
     },
 }
 
-pub async fn handle(cmd: &DevicesCommand, config: &RuntimeConfig) -> Result<(), AppError> {
+pub const COLUMNS: &[&str] = &[
+    "name",
+    "device",
+    "sku",
+    "type",
+    "category",
+    "connectivity",
+    "room",
+];
+
+pub async fn handle(ctx: &Ctx, cmd: &DevicesCommand) -> Result<(), CliError> {
     match cmd {
-        DevicesCommand::List => handle_list(config).await,
-        DevicesCommand::Get { device } => handle_get(device, config).await,
-        DevicesCommand::Search { query } => handle_search(query, config).await,
-        DevicesCommand::Caps { device } => handle_caps(device, config).await,
+        DevicesCommand::List => list(ctx).await,
+        DevicesCommand::Get { device } => get(ctx, device).await,
+        DevicesCommand::Search { query } => search(ctx, query).await,
+        DevicesCommand::Caps { device } => caps(ctx, device).await,
     }
 }
 
-/// The app's view of every device, when the account is logged in. `Ok(None)`
-/// means no account is configured (the Platform view stands alone);
-/// `Err` means an account is configured and the app call failed, which the
-/// caller reports rather than silently degrading.
-async fn app_view(
-    config: &RuntimeConfig,
-) -> Result<Option<Vec<crate::api::app::AppDevice>>, AppError> {
-    let session = match crate::cli::auth::load_account() {
-        Ok(s) if !s.token.is_empty() => s,
-        // No account stored (or an empty one): the Platform view stands alone.
-        Ok(_) | Err(AppError::NotAuthenticated) => return Ok(None),
-        // The keychain itself refused: that is a failure, not "no account".
-        Err(e) => return Err(e),
+/// The app's view of every device, when an account is signed in. `Ok(None)`
+/// means no account is configured (the Platform view stands alone); `Err`
+/// means an account is configured and the app call failed.
+async fn app_view(ctx: &Ctx) -> Result<Option<Vec<AppDevice>>, CliError> {
+    let Some(session) = ctx.account()? else {
+        return Ok(None);
     };
-    let app = crate::api::app::GoveeApp::new(session.client_id.clone(), config.verbose)?;
+    if !session.signed_in() {
+        return Ok(None);
+    }
+    let app = GoveeApp::new(session.client_id.clone(), ctx.verbose)?;
     let list = app.device_list(&session.token).await?;
-    Ok(Some(crate::api::app::app_devices(&list)))
+    Ok(Some(app::app_devices(&list)))
 }
 
-/// Fetch the app view, downgrading a failure to a stderr warning so a stale
+/// The app view, downgrading a failure to a stderr warning so a stale
 /// account session never hides the Platform listing.
-async fn app_view_or_warn(config: &RuntimeConfig) -> Option<Vec<crate::api::app::AppDevice>> {
-    match app_view(config).await {
+async fn app_view_or_warn(ctx: &Ctx) -> Option<Vec<AppDevice>> {
+    match app_view(ctx).await {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("warning: app view unavailable ({e}); rooms and Bluetooth-only devices omitted — run `govee auth login-account`");
+            ctx.note(&format!(
+                "warning: app view unavailable ({e}); rooms and Bluetooth-only devices omitted — run `govee auth login-account`"
+            ));
             None
         }
     }
 }
 
-async fn handle_list(config: &RuntimeConfig) -> Result<(), AppError> {
-    let devices = resolve::fetch_all_devices(config.verbose).await?;
-    let platform: Vec<crate::api::app::PlatformDevice> = devices
+fn platform_row(
+    info: &crate::models::device_info::DeviceInfo,
+    dtype: &crate::models::device_type::DeviceType,
+) -> PlatformDevice {
+    PlatformDevice {
+        device: info.id().to_string(),
+        sku: info.model().to_string(),
+        name: info.name().to_string(),
+        kind: dtype.display_name().to_string(),
+        category: dtype.category().to_string(),
+    }
+}
+
+async fn list(ctx: &Ctx) -> Result<(), CliError> {
+    let api = ctx.api()?;
+    let devices = resolve::fetch_all_devices(&api).await?;
+    let platform: Vec<PlatformDevice> = devices
         .iter()
-        .map(|(info, dtype)| crate::api::app::PlatformDevice {
-            device: info.id().to_string(),
-            sku: info.model().to_string(),
-            name: info.name().to_string(),
-            kind: dtype.display_name().to_string(),
-            category: dtype.category().to_string(),
-        })
+        .map(|(info, dtype)| platform_row(info, dtype))
         .collect();
-    let app = app_view_or_warn(config).await;
-    let rows = crate::api::app::merge_app_view(&platform, app.as_deref());
-    print_output(&json!(rows), config.output_mode);
+    let app = app_view_or_warn(ctx).await;
+    let rows = app::merge_app_view(&platform, app.as_deref());
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+        .collect();
+    emit_list(ctx.json, "device-list", json!({ "items": items }), COLUMNS);
     Ok(())
 }
 
-async fn handle_get(device: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let app = app_view_or_warn(config).await;
-    match resolve::resolve_device(device, config.verbose).await {
+async fn get(ctx: &Ctx, device: &str) -> Result<(), CliError> {
+    let api = ctx.api()?;
+    let app = app_view_or_warn(ctx).await;
+    match resolve::resolve_device(&api, device).await {
         Ok(dev) => {
-            let capabilities: Vec<serde_json::Value> = dev
+            let capabilities: Vec<Value> = dev
                 .info
                 .capabilities
                 .iter()
-                .map(|c| {
-                    json!({
-                        "type": c.capability_type,
-                        "instance": c.instance,
-                    })
-                })
+                .map(|c| json!({ "type": c.capability_type, "instance": c.instance }))
                 .collect();
-            let platform = crate::api::app::PlatformDevice {
-                device: dev.device_id().to_string(),
-                sku: dev.sku().to_string(),
-                name: dev.name().to_string(),
-                kind: dev.device_type.display_name().to_string(),
-                category: dev.device_type.category().to_string(),
-            };
+            let platform = platform_row(&dev.info, &dev.device_type);
             // The same typed row `devices list` prints, plus capabilities.
-            let row = crate::api::app::merge_app_view(&[platform], app.as_deref())
+            let row = app::merge_app_view(&[platform], app.as_deref())
                 .into_iter()
                 .next()
                 .expect("one platform device yields one row");
-            let mut v = serde_json::to_value(row)?;
+            let mut v = serde_json::to_value(row).map_err(AppError::from)?;
             v["capabilities"] = json!(capabilities);
-            print_output(&v, config.output_mode);
+            emit_one(ctx.json, "device", v);
             Ok(())
         }
         // Not on the Platform API: it may be one of the app's Bluetooth-only
         // devices, which `devices list` shows and this command must honour.
-        Err(AppError::DeviceNotFound(_)) => {
-            let rows = crate::api::app::merge_app_view(&[], app.as_deref());
+        Err(AppError::DeviceNotFound(reason)) => {
+            let rows = app::merge_app_view(&[], app.as_deref());
             let want = device.trim().to_lowercase();
             let hit = rows
                 .iter()
@@ -139,20 +153,21 @@ async fn handle_get(device: &str, config: &RuntimeConfig) -> Result<(), AppError
                         None
                     }
                 })
-                .ok_or_else(|| AppError::DeviceNotFound(device.to_string()))?;
-            let mut v = serde_json::to_value(hit)?;
+                .ok_or(AppError::DeviceNotFound(reason))?;
+            let mut v = serde_json::to_value(hit).map_err(AppError::from)?;
             v["capabilities"] = json!([]);
-            print_output(&v, config.output_mode);
+            emit_one(ctx.json, "device", v);
             Ok(())
         }
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
-async fn handle_search(query: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let devices = resolve::fetch_all_devices(config.verbose).await?;
+async fn search(ctx: &Ctx, query: &str) -> Result<(), CliError> {
+    let api = ctx.api()?;
+    let devices = resolve::fetch_all_devices(&api).await?;
     let query_lower = query.to_lowercase();
-    let matches: Vec<serde_json::Value> = devices
+    let items: Vec<Value> = devices
         .iter()
         .filter(|(info, _)| info.name().to_lowercase().contains(&query_lower))
         .map(|(info, dtype)| {
@@ -164,14 +179,19 @@ async fn handle_search(query: &str, config: &RuntimeConfig) -> Result<(), AppErr
             })
         })
         .collect();
-
-    print_output(&json!(matches), config.output_mode);
+    emit_list(
+        ctx.json,
+        "device-list",
+        json!({ "query": query, "items": items }),
+        &["name", "device", "sku", "type"],
+    );
     Ok(())
 }
 
-async fn handle_caps(device: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    let capabilities: Vec<serde_json::Value> = dev
+async fn caps(ctx: &Ctx, device: &str) -> Result<(), CliError> {
+    let api = ctx.api()?;
+    let dev = resolve::resolve_device(&api, device).await?;
+    let capabilities: Vec<Value> = dev
         .info
         .capabilities
         .iter()
@@ -183,14 +203,14 @@ async fn handle_caps(device: &str, config: &RuntimeConfig) -> Result<(), AppErro
             })
         })
         .collect();
-
-    print_output(
-        &json!({
+    emit_one(
+        ctx.json,
+        "device-capabilities",
+        json!({
             "name": dev.name(),
             "sku": dev.sku(),
             "capabilities": capabilities,
         }),
-        config.output_mode,
     );
     Ok(())
 }

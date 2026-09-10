@@ -1,128 +1,92 @@
 use clap::Subcommand;
-use serde_json::json;
+use pk_cli_core::CliError;
+use serde_json::{json, Value};
 
-use crate::cli::output::{print_json, print_output};
-use crate::cli::scene::normalize_for_match;
-use crate::config::RuntimeConfig;
+use super::output::{emit_list, emit_one};
+use super::scene::normalize_for_match;
+use super::Ctx;
 use crate::error::AppError;
+use crate::models::device::validate_sensitivity;
 use crate::resolve;
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum MusicCommand {
-    /// List available music modes for a device
+    /// The music modes a device offers (music-mode-list/v1).
+    #[command(visible_alias = "ls")]
     List {
         /// Device name or ID
         device: String,
     },
-    /// Activate a music mode by name
+    /// Activate a music mode by name.
     Set {
         /// Device name or ID
         device: String,
         /// Music mode name (case-insensitive, partial match supported)
         mode: String,
-        /// Sensitivity (0-100, default: 50)
+        /// Sensitivity (0-100)
         #[arg(short, long, default_value = "50")]
         sensitivity: u8,
     },
 }
 
-pub async fn handle(cmd: &MusicCommand, config: &RuntimeConfig) -> Result<(), AppError> {
+/// Argument checks that need no credential (exit 2 before the keychain).
+pub fn validate(cmd: &MusicCommand) -> Result<(), CliError> {
+    if let MusicCommand::Set { sensitivity, .. } = cmd {
+        validate_sensitivity(*sensitivity)?;
+    }
+    Ok(())
+}
+
+pub async fn handle(ctx: &Ctx, cmd: &MusicCommand) -> Result<(), CliError> {
+    validate(cmd)?;
+    let api = ctx.api()?;
     match cmd {
-        MusicCommand::List { device } => handle_list(device, config).await,
+        MusicCommand::List { device } => {
+            let dev = resolve::resolve_device(&api, device).await?;
+            if !dev.info.has_music_mode() {
+                return Err(AppError::UnsupportedOperation(format!(
+                    "{} does not support music mode",
+                    dev.name()
+                ))
+                .into());
+            }
+            let items = extract_music_modes(&dev.info.capabilities);
+            emit_list(
+                ctx.json,
+                "music-mode-list",
+                json!({ "device": dev.name(), "items": items }),
+                &["name"],
+            );
+        }
         MusicCommand::Set {
             device,
             mode,
             sensitivity,
-        } => handle_set(device, mode, *sensitivity, config).await,
-    }
-}
-
-fn extract_music_modes(
-    capabilities: &[crate::models::capability::Capability],
-) -> Vec<serde_json::Value> {
-    let mut modes = Vec::new();
-    for cap in capabilities {
-        if cap.capability_type == "devices.capabilities.music_setting"
-            && cap.instance == "musicMode"
-        {
-            // Music mode uses STRUCT parameters with fields, not top-level options.
-            // The mode enum is in the field named "musicMode".
-            if let Some(fields) = cap.parameters.get("fields").and_then(|v| v.as_array()) {
-                for field in fields {
-                    let field_name = field.get("fieldName").and_then(|v| v.as_str());
-                    if field_name == Some("musicMode") {
-                        if let Some(options) = field.get("options").and_then(|v| v.as_array()) {
-                            for option in options {
-                                if let Some(name) = option.get("name").and_then(|n| n.as_str()) {
-                                    modes.push(json!({
-                                        "name": name,
-                                        "value": option.get("value"),
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    modes
-}
-
-async fn handle_list(device: &str, config: &RuntimeConfig) -> Result<(), AppError> {
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    if !dev.info.has_music_mode() {
-        return Err(AppError::UnsupportedOperation(format!(
-            "{} does not support music mode",
-            dev.name()
-        )));
-    }
-
-    let modes = extract_music_modes(&dev.info.capabilities);
-    print_output(
-        &json!({
-            "device": dev.name(),
-            "music_modes": modes,
-        }),
-        config.output_mode,
-    );
-    Ok(())
-}
-
-async fn handle_set(
-    device: &str,
-    mode: &str,
-    sensitivity: u8,
-    config: &RuntimeConfig,
-) -> Result<(), AppError> {
-    let dev = resolve::resolve_device(device, config.verbose).await?;
-    let modes = extract_music_modes(&dev.info.capabilities);
-    let mode_normalized = normalize_for_match(mode);
-
-    // Exact match (normalized), then partial
-    let found = modes
-        .iter()
-        .find(|m| {
-            m.get("name")
-                .and_then(|n| n.as_str())
-                .map(|n| normalize_for_match(n) == mode_normalized)
-                .unwrap_or(false)
-        })
-        .or_else(|| {
-            modes.iter().find(|m| {
+        } => {
+            let dev = resolve::resolve_device(&api, device).await?;
+            let modes = extract_music_modes(&dev.info.capabilities);
+            let mode_normalized = normalize_for_match(mode);
+            let name_of = |m: &Value| {
                 m.get("name")
                     .and_then(|n| n.as_str())
-                    .map(|n| normalize_for_match(n).contains(&mode_normalized))
-                    .unwrap_or(false)
-            })
-        });
-
-    if let Some(music_mode) = found {
-        let mode_name = music_mode
-            .get("name")
-            .and_then(|n| n.as_str())
-            .unwrap_or(mode);
-        if let Some(mode_value) = music_mode.get("value") {
+                    .map(normalize_for_match)
+            };
+            let found = modes
+                .iter()
+                .find(|m| name_of(m).as_deref() == Some(mode_normalized.as_str()))
+                .or_else(|| {
+                    modes
+                        .iter()
+                        .find(|m| name_of(m).is_some_and(|n| n.contains(&mode_normalized)))
+                })
+                .ok_or_else(|| {
+                    AppError::DeviceNotFound(format!(
+                        "music mode `{mode}` not found for device `{}`",
+                        dev.name()
+                    ))
+                })?;
+            let mode_name = found.get("name").and_then(|n| n.as_str()).unwrap_or(mode);
+            let mode_value = found.get("value").cloned().unwrap_or(Value::Null);
             // The API expects a struct: {musicMode: <id>, sensitivity: <0-100>, autoColor: 1}
             let value = json!({
                 "musicMode": mode_value,
@@ -130,18 +94,42 @@ async fn handle_set(
                 "autoColor": 1,
             });
             dev.set_music_mode(value).await?;
-            print_json(&json!({
-                "device": dev.name(),
-                "music_mode": mode_name,
-                "activated": true,
-            }));
-            return Ok(());
+            emit_one(
+                ctx.json,
+                "music-mode",
+                json!({ "device": dev.name(), "music_mode": mode_name, "sensitivity": sensitivity, "activated": true }),
+            );
         }
     }
+    Ok(())
+}
 
-    Err(AppError::InvalidInput(format!(
-        "Music mode '{}' not found for device '{}'",
-        mode,
-        dev.name()
-    )))
+/// Music mode uses STRUCT parameters with fields, not top-level options;
+/// the mode enum is in the field named `musicMode`.
+pub fn extract_music_modes(capabilities: &[crate::models::capability::Capability]) -> Vec<Value> {
+    let mut modes = Vec::new();
+    for cap in capabilities {
+        if cap.capability_type != "devices.capabilities.music_setting"
+            || cap.instance != "musicMode"
+        {
+            continue;
+        }
+        let Some(fields) = cap.parameters.get("fields").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for field in fields {
+            if field.get("fieldName").and_then(|v| v.as_str()) != Some("musicMode") {
+                continue;
+            }
+            let Some(options) = field.get("options").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for option in options {
+                if let Some(name) = option.get("name").and_then(|n| n.as_str()) {
+                    modes.push(json!({ "name": name, "value": option.get("value") }));
+                }
+            }
+        }
+    }
+    modes
 }
