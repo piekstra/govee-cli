@@ -65,9 +65,10 @@ jobs:
     permissions:
       contents: read
       # rustsec/audit-check publishes its report through the Checks API.
+      # rustsec/audit-check posts a check run; gitleaks-action comments on
+      # the PR. Neither uploads SARIF, so no security-events scope.
       checks: write
       pull-requests: write
-      security-events: write
     steps:
       - uses: actions/checkout@v4
         with:

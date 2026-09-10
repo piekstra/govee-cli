@@ -9,12 +9,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AccountSession {
     pub token: String,
     pub account_id: String,
     pub client_id: String,
     pub email: String,
+}
+
+/// The bearer token never appears in a `{:?}` rendering: a session that
+/// reaches a log line or an error message shows a placeholder instead.
+impl std::fmt::Debug for AccountSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountSession")
+            .field(
+                "token",
+                &if self.token.is_empty() {
+                    "<none>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("account_id", &self.account_id)
+            .field("client_id", &self.client_id)
+            .field("email", &self.email)
+            .finish()
+    }
 }
 
 impl AccountSession {

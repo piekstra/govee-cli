@@ -765,3 +765,17 @@ mod room_writes {
         assert!(d[1].room_id.is_none() && d[1].room.is_none());
     }
 }
+
+mod hex_color_boundaries {
+    use govee::cli::light::parse_hex_color;
+
+    #[test]
+    fn multibyte_input_is_a_usage_error_not_a_panic() {
+        // 6 bytes, 5 chars: byte slicing would cut through the "é".
+        assert!(parse_hex_color("A\u{e9}BCD").is_err());
+        // 6 chars, 7 bytes.
+        assert!(parse_hex_color("AB\u{e9}CDE").is_err());
+        assert_eq!(parse_hex_color("#ff8000").unwrap(), (255, 128, 0));
+        assert!(parse_hex_color("GG0000").is_err());
+    }
+}

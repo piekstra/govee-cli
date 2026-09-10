@@ -142,7 +142,10 @@ pub async fn handle(ctx: &Ctx, cmd: &LightCommand) -> Result<(), CliError> {
 
 pub fn parse_hex_color(hex: &str) -> Result<(u8, u8, u8), AppError> {
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 {
+    // Six ASCII hex digits exactly: checking the characters (not the byte
+    // length) keeps the fixed-offset slices below on char boundaries, so a
+    // multi-byte character is a usage error rather than a panic.
+    if hex.chars().count() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(AppError::InvalidInput(format!(
             "invalid hex color `{hex}`: expected 6 hex digits (e.g. FF0000)"
         )));
