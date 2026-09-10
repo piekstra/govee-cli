@@ -1,22 +1,35 @@
+//! `govee auth …` — the Platform API key (`login`/`logout`/`status`/
+//! `set-credential`, the SPEC v1 surface) and the Govee Home account session
+//! (`login-account`/`logout-account`) the room commands need.
+
 use clap::Subcommand;
+use pk_cli_auth::{AuthMethod, AuthStatus, LoginArgs, LogoutArgs, SetCredentialArgs};
+use pk_cli_core::output::{self, emit_one};
+use pk_cli_core::CliError;
+use pk_cli_secrets::{read_stdin, Secret};
 use serde_json::json;
 
+use super::{prompt_line, Ctx};
+use crate::api::app::{GoveeApp, LoginOutcome};
 use crate::api::client::GoveeApi;
-use crate::auth::{api_key, keychain};
-use crate::cli::output::print_json;
-use crate::config::RuntimeConfig;
-use crate::error::AppError;
+use crate::auth::account::{self, AccountSession};
+use crate::auth::{api_key, legacy, ACCOUNT_ITEM, API_KEY_ITEM};
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum AuthCommand {
-    /// Store a Govee API key for authentication
-    Login,
-    /// Clear stored API key
-    Logout,
-    /// Show authentication status
+    /// Store the Govee Platform API key in the OS keychain (verified live
+    /// unless --no-verify). Get one in the Govee Home app: Profile >
+    /// Settings > Apply for API Key.
+    Login(LoginArgs),
+    /// Report credential/session state (auth-status/v1).
     Status,
-    /// Sign in to the Govee account itself (email + password + emailed
-    /// code), for the room commands the public API can't serve
+    /// Clear the account session; --forget also removes the API key and
+    /// the config file.
+    Logout(LogoutArgs),
+    /// Raw keychain write of the API key for rotation / headless setup.
+    SetCredential(SetCredentialArgs),
+    /// Sign in to the Govee Home account itself (email + password + emailed
+    /// code), for the room commands the Platform API can't serve.
     LoginAccount {
         /// The verification code Govee emailed, when resuming a login
         /// that asked for one
@@ -26,202 +39,343 @@ pub enum AuthCommand {
         /// login-account --stdin --email you@example.com`)
         #[arg(long)]
         stdin: bool,
-        /// Account email (with --stdin; otherwise prompted)
+        /// Account email (with --stdin; otherwise prompted). Also
+        /// $GOVEE_EMAIL, then `config set username`.
         #[arg(long)]
         email: Option<String>,
     },
-    /// Clear the stored account session (the API key stays)
+    /// Clear the stored account session (the API key stays).
     LogoutAccount,
 }
 
-pub async fn handle(cmd: &AuthCommand, config: &RuntimeConfig) -> Result<(), AppError> {
+pub async fn handle(ctx: &Ctx, cmd: &AuthCommand) -> Result<(), CliError> {
     match cmd {
-        AuthCommand::Login => handle_login(config).await,
-        AuthCommand::Logout => handle_logout(),
-        AuthCommand::Status => handle_status(config).await,
+        AuthCommand::Login(args) => login(ctx, args).await,
+        AuthCommand::Status => status(ctx),
+        AuthCommand::Logout(args) => logout(ctx, args),
+        AuthCommand::SetCredential(args) => set_credential(ctx, args),
         AuthCommand::LoginAccount { code, stdin, email } => {
-            handle_login_account(code.as_deref(), *stdin, email.as_deref(), config).await
+            login_account(ctx, code.as_deref(), *stdin, email.as_deref()).await
         }
-        AuthCommand::LogoutAccount => {
-            keychain::clear_account()?;
-            print_json(&json!({ "status": "account_logged_out" }));
-            Ok(())
-        }
+        AuthCommand::LogoutAccount => logout_account(ctx),
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct AccountSession {
-    pub token: String,
-    pub account_id: String,
-    pub client_id: String,
-    pub email: String,
+/// Move 0.1's keychain entries (service `govee-cli`) and record them in the
+/// config so the gated reads find them. Reports what moved on stderr.
+fn migrate_legacy(ctx: &Ctx) -> Result<legacy::Moved, CliError> {
+    let moved = legacy::migrate(&ctx.creds)?;
+    if !moved.any() {
+        return Ok(moved);
+    }
+    // The moved session names the account the config must record.
+    let email = if moved.account {
+        ctx.creds
+            .get_json::<AccountSession>(ACCOUNT_ITEM)?
+            .map(|s| s.email)
+    } else {
+        None
+    };
+    ctx.update_config(|c| {
+        if moved.api_key {
+            c.api_key_in_keychain = true;
+        }
+        if let Some(e) = email.clone() {
+            c.username = Some(e);
+        }
+    })?;
+    if moved.api_key {
+        ctx.note(&format!(
+            "moved the API key stored by govee-cli 0.1 (keychain service `{}`) to `{}`",
+            legacy::LEGACY_SERVICE,
+            ctx.creds.service()
+        ));
+    }
+    if let Some(e) = &email {
+        ctx.note(&format!(
+            "moved the Govee account session for {e} to `{}`",
+            ctx.creds.service()
+        ));
+    }
+    Ok(moved)
 }
 
-pub fn load_account() -> Result<AccountSession, AppError> {
-    let blob = keychain::get_account()?.ok_or(AppError::NotAuthenticated)?;
-    serde_json::from_str(&blob).map_err(|_| AppError::NotAuthenticated)
+async fn verify_key(ctx: &Ctx, key: &Secret) -> Result<usize, CliError> {
+    let api = GoveeApi::new(key.expose().to_string(), ctx.verbose)?;
+    let data = api.get_devices().await?;
+    let n = data.as_array().map(|a| a.len()).unwrap_or(0);
+    ctx.note(&format!("ok: {n} device(s) visible to this key"));
+    Ok(n)
 }
 
-async fn handle_login_account(
+async fn login(ctx: &Ctx, args: &LoginArgs) -> Result<(), CliError> {
+    let explicit = args.source.stdin || args.source.from_env.is_some();
+    if args.non_interactive && !explicit {
+        return Err(CliError::Usage(
+            "--non-interactive never prompts: provide the key via --stdin or --from-env <VAR>"
+                .into(),
+        ));
+    }
+    // Upgrade path: at a terminal with nothing configured yet, a key stored
+    // by 0.1 is moved instead of asked for again.
+    if !ctx.cfg.api_key_in_keychain && !explicit && ctx.interactive && migrate_legacy(ctx)?.api_key
+    {
+        if !args.no_verify {
+            // Just written by this binary, so reading it back is prompt-free.
+            let key = ctx.creds.get(API_KEY_ITEM)?.ok_or_else(|| {
+                CliError::Keychain("the moved API key could not be read back".into())
+            })?;
+            verify_key(ctx, &key).await?;
+        }
+        return Ok(());
+    }
+    if ctx.cfg.api_key_in_keychain && ctx.creds.get(API_KEY_ITEM)?.is_some() && !args.overwrite {
+        return Err(CliError::Usage(
+            "an API key is already stored; pass --overwrite to replace it".into(),
+        ));
+    }
+    let prompt = if args.non_interactive {
+        None
+    } else {
+        Some("Govee API key")
+    };
+    let pasted = args.source.read(prompt)?;
+    let key = Secret::new(pasted.expose().trim().to_string());
+    if key.is_empty() {
+        return Err(CliError::Usage("no API key given".into()));
+    }
+    if !args.no_verify {
+        verify_key(ctx, &key).await?;
+    }
+    ctx.creds.set(API_KEY_ITEM, &key)?;
+    ctx.update_config(|c| c.api_key_in_keychain = true)?;
+    ctx.note(&format!(
+        "API key stored in the OS keychain ({})",
+        ctx.creds.service()
+    ));
+    Ok(())
+}
+
+fn status(ctx: &Ctx) -> Result<(), CliError> {
+    let (source, in_keychain) = api_key::status(&ctx.cfg, &ctx.creds)?;
+    let mut status = AuthStatus::new(true, source.is_some(), AuthMethod::Password);
+    status.username = ctx.cfg.username.clone();
+    status.credential_in_keychain = Some(in_keychain);
+
+    // The app account session is a second, optional credential; reported as
+    // an extra field (additive within auth-status/v1).
+    let session = ctx.account()?;
+    let signed_in = session.as_ref().is_some_and(|s| s.signed_in());
+    let account_session = json!({
+        "configured": ctx.cfg.username.is_some(),
+        "signed_in": signed_in,
+    });
+
+    if ctx.json {
+        let mut v = status.to_json();
+        if let Some(s) = source {
+            v["key_source"] = json!(s.as_str());
+        }
+        v["account_session"] = account_session;
+        output::json(&v);
+    } else {
+        status.render();
+        if let Some(s) = source {
+            println!("Key source:    {}", s.as_str());
+        }
+        println!(
+            "App account:   {}",
+            match (&ctx.cfg.username, signed_in) {
+                (Some(u), true) => format!("signed in as {u}"),
+                (Some(u), false) => format!("{u} (not signed in; run `govee auth login-account`)"),
+                (None, _) => "not signed in (run `govee auth login-account` for rooms)".to_string(),
+            }
+        );
+    }
+    Ok(())
+}
+
+fn logout(ctx: &Ctx, args: &LogoutArgs) -> Result<(), CliError> {
+    if ctx.cfg.username.is_some() && account::clear(&ctx.creds)? {
+        ctx.note("account session cleared");
+    }
+    if args.forget {
+        if ctx.cfg.api_key_in_keychain {
+            ctx.creds.delete(API_KEY_ITEM)?;
+        }
+        ctx.store.clear()?;
+        ctx.note("API key removed from the keychain; config cleared");
+    } else {
+        ctx.note("API key kept (stateless); pass --forget to remove it");
+    }
+    Ok(())
+}
+
+fn set_credential(ctx: &Ctx, args: &SetCredentialArgs) -> Result<(), CliError> {
+    if ctx.cfg.api_key_in_keychain && ctx.creds.get(API_KEY_ITEM)?.is_some() && !args.overwrite {
+        return Err(CliError::Usage(
+            "an API key is already stored; pass --overwrite to replace it".into(),
+        ));
+    }
+    let pasted = args.source.read(None)?;
+    let key = Secret::new(pasted.expose().trim().to_string());
+    if key.is_empty() {
+        return Err(CliError::Usage("no API key given".into()));
+    }
+    ctx.creds.set(API_KEY_ITEM, &key)?;
+    ctx.update_config(|c| c.api_key_in_keychain = true)?;
+    ctx.note("API key stored");
+    Ok(())
+}
+
+fn logout_account(ctx: &Ctx) -> Result<(), CliError> {
+    if ctx.cfg.username.is_none() {
+        ctx.note("no account session configured; nothing to clear");
+        return Ok(());
+    }
+    account::clear(&ctx.creds)?;
+    ctx.note("account session cleared (the API key stays)");
+    Ok(())
+}
+
+async fn login_account(
+    ctx: &Ctx,
     code: Option<&str>,
     stdin: bool,
     email_flag: Option<&str>,
-    config: &RuntimeConfig,
-) -> Result<(), AppError> {
-    use crate::api::app::{GoveeApp, LoginOutcome};
-    use std::io::{IsTerminal, Read};
+) -> Result<(), CliError> {
+    use std::io::IsTerminal;
     let interactive = std::io::stdin().is_terminal() && !stdin;
+    let env_password = std::env::var("GOVEE_PASSWORD")
+        .ok()
+        .filter(|p| !p.is_empty());
+    // The password's source must be knowable before any keychain read, so a
+    // headless run without one stops here (exit 2), prompt-free.
+    if !stdin && env_password.is_none() && !interactive {
+        return Err(CliError::Usage(
+            "not a terminal: pass the password on --stdin (or set $GOVEE_PASSWORD)".into(),
+        ));
+    }
+
+    // The existing session, if any, for a stable client id and the
+    // remembered email — from the new store, or moved from 0.1's.
+    let mut existing = ctx.account()?;
+    let mut migrated = false;
+    if existing.is_none() && ctx.cfg.username.is_none() && migrate_legacy(ctx)?.account {
+        existing = ctx.creds.get_json(ACCOUNT_ITEM)?;
+        migrated = true;
+    }
+    if let (true, None, Some(s)) = (migrated, code, existing.as_ref()) {
+        if s.signed_in() {
+            ctx.note("the moved session is ready to use; run again to sign in afresh");
+            emit_one(
+                ctx.json,
+                "account-login",
+                json!({ "status": "migrated", "email": s.email }),
+            );
+            return Ok(());
+        }
+    }
     // Keep the client id stable across attempts so the emailed code matches.
-    let (client_id, remembered_email) = match load_account() {
-        Ok(a) => (a.client_id, Some(a.email)),
-        Err(_) => (GoveeApp::new_client_id(), None),
+    let (client_id, remembered_email) = match existing {
+        Some(a) => (a.client_id, Some(a.email)),
+        None => (GoveeApp::new_client_id(), None),
     };
     let email = match email_flag
         .map(str::to_string)
         .or_else(|| std::env::var("GOVEE_EMAIL").ok().filter(|e| !e.is_empty()))
+        .or_else(|| ctx.cfg.username.clone())
+        .or(remembered_email)
     {
         Some(e) => e,
         None if interactive => {
-            let mut p = dialoguer::Input::<String>::new().with_prompt("Govee account email");
-            if let Some(e) = remembered_email {
-                p = p.default(e);
+            let e = prompt_line("Govee account email", None)?;
+            if e.is_empty() {
+                return Err(CliError::Usage("an email is required".into()));
             }
-            p.interact_text()
-                .map_err(|e| AppError::InvalidInput(e.to_string()))?
+            e
         }
-        None => remembered_email.ok_or_else(|| {
-            AppError::InvalidInput(
-                "not a terminal: pass --email and the password on --stdin".into(),
-            )
-        })?,
+        None => {
+            return Err(CliError::Usage(
+                "no account email: pass --email (or set $GOVEE_EMAIL)".into(),
+            ))
+        }
     };
     let password = if stdin {
-        let mut pw = String::new();
-        std::io::stdin()
-            .read_to_string(&mut pw)
-            .map_err(|e| AppError::InvalidInput(format!("reading password from stdin: {e}")))?;
-        let pw = pw.trim_end_matches(['\r', '\n']).to_string();
+        let pw = read_stdin()?;
         if pw.is_empty() {
-            return Err(AppError::InvalidInput("no password on stdin".into()));
+            return Err(CliError::Usage("no password on stdin".into()));
         }
         pw
+    } else if let Some(p) = env_password {
+        Secret::new(p)
     } else {
-        match std::env::var("GOVEE_PASSWORD") {
-            Ok(p) if !p.is_empty() => p,
-            _ if interactive => dialoguer::Password::new()
-                .with_prompt("Govee account password")
-                .interact()
-                .map_err(|e| AppError::InvalidInput(e.to_string()))?,
-            _ => {
-                return Err(AppError::InvalidInput(
-                    "not a terminal: pass the password on --stdin".into(),
-                ))
-            }
-        }
+        Secret::prompt("Govee account password")?
     };
-    let app = GoveeApp::new(client_id.clone(), config.verbose)?;
+
+    let app = GoveeApp::new(client_id.clone(), ctx.verbose)?;
     // Remember the identity before any network call so a code-resume finds it.
-    keychain::store_account(&serde_json::to_string(&AccountSession {
-        token: String::new(),
-        account_id: String::new(),
-        client_id: client_id.clone(),
-        email: email.clone(),
-    })?)?;
+    account::store(
+        &ctx.creds,
+        &AccountSession {
+            token: String::new(),
+            account_id: String::new(),
+            client_id: client_id.clone(),
+            email: email.clone(),
+        },
+    )?;
+    ctx.update_config(|c| c.username = Some(email.clone()))?;
 
     let mut code = code.map(str::to_string);
     loop {
-        match app.login(&email, &password, code.as_deref()).await? {
+        match app
+            .login(&email, password.expose(), code.as_deref())
+            .await?
+        {
             LoginOutcome::Token { token, account_id } => {
-                keychain::store_account(&serde_json::to_string(&AccountSession {
-                    token,
-                    account_id: account_id.clone(),
-                    client_id,
-                    email: email.clone(),
-                })?)?;
-                print_json(
-                    &json!({"status": "account_authenticated", "email": email, "account_id": account_id}),
+                account::store(
+                    &ctx.creds,
+                    &AccountSession {
+                        token,
+                        account_id: account_id.clone(),
+                        client_id,
+                        email: email.clone(),
+                    },
+                )?;
+                ctx.note(&format!(
+                    "account session stored in the OS keychain ({})",
+                    ctx.creds.service()
+                ));
+                emit_one(
+                    ctx.json,
+                    "account-login",
+                    json!({ "status": "authenticated", "email": email, "account_id": account_id }),
                 );
                 return Ok(());
             }
             LoginOutcome::NeedsCode => {
                 if code.is_some() {
-                    return Err(AppError::Api {
-                        message: "Govee still wants a verification code; request a fresh one by running without --code".into(),
-                        error_code: Some(454),
-                    });
+                    return Err(CliError::Upstream(
+                        "Govee still wants a verification code; request a fresh one by running without --code".into(),
+                    ));
                 }
                 app.request_code(&email).await?;
-                eprintln!("Govee emailed a verification code to {email}.");
+                ctx.note(&format!("Govee emailed a verification code to {email}."));
                 if !interactive {
-                    print_json(
-                        &json!({"status": "code_sent", "email": email, "next": "re-run `govee auth login-account --stdin --code <CODE>`"}),
+                    emit_one(
+                        ctx.json,
+                        "account-login",
+                        json!({
+                            "status": "code_sent",
+                            "email": email,
+                            "next": "re-run `govee auth login-account --stdin --code <CODE>`",
+                        }),
                     );
                     return Ok(());
                 }
-                let c = dialoguer::Input::<String>::new()
-                    .with_prompt("Verification code")
-                    .interact_text()
-                    .map_err(|e| AppError::InvalidInput(e.to_string()))?;
-                code = Some(c.trim().to_string());
+                let c = prompt_line("Verification code", None)?;
+                code = Some(c);
             }
         }
     }
-}
-
-async fn handle_login(config: &RuntimeConfig) -> Result<(), AppError> {
-    // Check if already provided via env var
-    let key = match std::env::var("GOVEE_API_KEY") {
-        Ok(key) if !key.is_empty() => key,
-        _ => dialoguer::Password::new()
-            .with_prompt("Govee API Key")
-            .interact()
-            .map_err(|e| AppError::InvalidInput(e.to_string()))?,
-    };
-
-    // Validate by fetching devices
-    let api = GoveeApi::new(key.clone(), config.verbose)?;
-    let data = api.get_devices().await?;
-    let device_count = data.as_array().map(|a| a.len()).unwrap_or(0);
-
-    keychain::store_api_key(&key)?;
-
-    print_json(&json!({
-        "status": "authenticated",
-        "devices_found": device_count,
-    }));
-    Ok(())
-}
-
-fn handle_logout() -> Result<(), AppError> {
-    keychain::clear_api_key()?;
-    print_json(&json!({ "status": "logged_out" }));
-    Ok(())
-}
-
-async fn handle_status(config: &RuntimeConfig) -> Result<(), AppError> {
-    match api_key::get_api_key() {
-        Ok(key) => {
-            let api = GoveeApi::new(key, config.verbose)?;
-            match api.get_devices().await {
-                Ok(data) => {
-                    let device_count = data.as_array().map(|a| a.len()).unwrap_or(0);
-                    print_json(&json!({
-                        "authenticated": true,
-                        "devices_found": device_count,
-                    }));
-                }
-                Err(_) => {
-                    print_json(&json!({
-                        "authenticated": true,
-                        "api_reachable": false,
-                    }));
-                }
-            }
-        }
-        Err(_) => {
-            print_json(&json!({ "authenticated": false }));
-        }
-    }
-    Ok(())
 }

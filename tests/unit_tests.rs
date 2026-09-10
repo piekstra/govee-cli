@@ -364,14 +364,14 @@ fn device_info_no_capabilities() {
 fn device_info_deserialization() {
     let info: govee::models::device_info::DeviceInfo = serde_json::from_value(json!({
         "sku": "H60B0",
-        "device": "14:DF:DD:99:83:06:19:44",
-        "deviceName": "Living Room Light 1",
+        "device": "AA:BB:CC:DD:EE:FF:00:11",
+        "deviceName": "Office Floor Lamp",
         "capabilities": []
     }))
     .unwrap();
 
-    assert_eq!(info.name(), "Living Room Light 1");
-    assert_eq!(info.id(), "14:DF:DD:99:83:06:19:44");
+    assert_eq!(info.name(), "Office Floor Lamp");
+    assert_eq!(info.id(), "AA:BB:CC:DD:EE:FF:00:11");
     assert_eq!(info.model(), "H60B0");
 }
 
@@ -422,36 +422,95 @@ fn capability_type_unknown_preserved() {
     assert_eq!(parsed.api_type(), "devices.capabilities.future_thing");
 }
 
-// -- Error type tests --
+// -- Error mapping tests (the family exit-code contract, SPEC §1.5) --
 
 #[test]
-fn error_exit_codes() {
+fn errors_map_to_the_family_exit_codes() {
     use govee::error::AppError;
-    assert_eq!(AppError::NotAuthenticated.exit_code(), 2);
-    assert_eq!(AppError::DeviceNotFound("x".into()).exit_code(), 3);
-    assert_eq!(AppError::RateLimited("x".into()).exit_code(), 4);
-    assert_eq!(AppError::InvalidInput("x".into()).exit_code(), 1);
+    use pk_cli_core::CliError;
+    let code = |e: AppError| CliError::from(e).exit_code();
+    assert_eq!(code(AppError::NotAuthenticated), 3);
+    assert_eq!(code(AppError::AccountNotAuthenticated), 3);
+    assert_eq!(code(AppError::DeviceNotFound("x".into())), 4);
+    assert_eq!(code(AppError::RateLimited("x".into())), 5);
+    assert_eq!(
+        code(AppError::Api {
+            message: "x".into(),
+            error_code: Some(500)
+        }),
+        5
+    );
+    assert_eq!(code(AppError::InvalidInput("x".into())), 2);
+    assert_eq!(code(AppError::UnsupportedOperation("x".into())), 2);
 }
 
 #[test]
 fn error_json_format() {
     use govee::error::AppError;
-    let err = AppError::DeviceNotFound("My Lamp".into());
-    let j = err.to_json();
-    assert_eq!(j["error"], "device_not_found");
-    assert!(j["message"].as_str().unwrap().contains("My Lamp"));
+    use pk_cli_core::CliError;
+    let j = CliError::from(AppError::DeviceNotFound("My Lamp".into())).to_json();
+    assert_eq!(j["error"]["code"], "not_found");
+    assert!(j["error"]["message"].as_str().unwrap().contains("My Lamp"));
 }
 
 #[test]
 fn error_api_includes_error_code() {
     use govee::error::AppError;
-    let err = AppError::Api {
+    use pk_cli_core::CliError;
+    let j = CliError::from(AppError::Api {
         message: "Bad request".into(),
         error_code: Some(400),
-    };
-    let j = err.to_json();
-    assert_eq!(j["error"], "api");
-    assert_eq!(j["error_code"], 400);
+    })
+    .to_json();
+    assert_eq!(j["error"]["code"], "upstream");
+    let msg = j["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("Bad request") && msg.contains("400"));
+}
+
+#[test]
+fn auth_errors_point_at_the_right_login_command() {
+    use govee::error::AppError;
+    use pk_cli_core::CliError;
+    assert!(CliError::from(AppError::NotAuthenticated)
+        .to_string()
+        .contains("auth login"));
+    assert!(CliError::from(AppError::AccountNotAuthenticated)
+        .to_string()
+        .contains("auth login-account"));
+}
+
+// -- Control argument validation (exit 2 before any credential) --
+
+#[test]
+fn control_values_validate_before_any_network() {
+    use govee::models::device::{validate_brightness, validate_color_temp, validate_sensitivity};
+    assert!(validate_brightness(0).is_err());
+    assert!(validate_brightness(1).is_ok());
+    assert!(validate_brightness(100).is_ok());
+    assert!(validate_brightness(101).is_err());
+    assert!(validate_color_temp(1999).is_err());
+    assert!(validate_color_temp(2000).is_ok());
+    assert!(validate_color_temp(9000).is_ok());
+    assert!(validate_color_temp(9001).is_err());
+    assert!(validate_sensitivity(100).is_ok());
+    assert!(validate_sensitivity(101).is_err());
+    assert!(govee::cli::toggle::parse_on_off("ON").unwrap());
+    assert!(!govee::cli::toggle::parse_on_off("0").unwrap());
+    assert!(govee::cli::toggle::parse_on_off("maybe").is_err());
+}
+
+#[test]
+fn power_state_is_read_from_the_power_switch_capability() {
+    use govee::cli::power::find_power_state;
+    let on = json!({"capabilities": [
+        {"type": "devices.capabilities.on_off", "instance": "powerSwitch", "state": {"value": 1}}
+    ]});
+    let off = json!({"capabilities": [
+        {"type": "devices.capabilities.on_off", "instance": "powerSwitch", "state": {"value": 0}}
+    ]});
+    assert!(find_power_state(&on));
+    assert!(!find_power_state(&off));
+    assert!(!find_power_state(&json!({})));
 }
 
 mod app_view {
@@ -537,11 +596,10 @@ mod app_view {
 mod room_writes {
     use govee::api::app::{app_devices, AppDevice, Connectivity};
     use govee::cli::rooms::{
-        find_device, find_room, members_of, membership_with, placed_in, rooms_of,
+        device_room_row, find_device, find_room, members_of, membership_with, placed_in, rooms_of,
         validate_room_name, Room,
     };
-    use govee::error::AppError;
-    use govee::resolve::pick;
+    use pk_cli_core::{resolve::pick, CliError};
     use serde_json::json;
 
     fn rooms() -> Vec<Room> {
@@ -585,14 +643,8 @@ mod room_writes {
         assert_eq!(find_room(&r, "guest").unwrap().id, 3);
         // An exact case-insensitive match wins before partials get a say.
         assert_eq!(find_room(&r, "bathroom").unwrap().id, 4);
-        assert!(matches!(
-            find_room(&r, "attic"),
-            Err(AppError::DeviceNotFound(_))
-        ));
-        assert!(matches!(
-            find_room(&r, "room"),
-            Err(AppError::DeviceNotFound(_))
-        ));
+        assert!(matches!(find_room(&r, "attic"), Err(CliError::NotFound(_))));
+        assert!(matches!(find_room(&r, "room"), Err(CliError::NotFound(_))));
         let twins = vec![
             Room {
                 id: 9,
@@ -605,7 +657,7 @@ mod room_writes {
         ];
         assert!(matches!(
             find_room(&twins, "Den"),
-            Err(AppError::DeviceNotFound(_))
+            Err(CliError::NotFound(_))
         ));
         // Duplicate ids are ambiguous too, never a silent first pick.
         let dup_ids = vec![
@@ -620,7 +672,7 @@ mod room_writes {
         ];
         assert!(matches!(
             find_room(&dup_ids, "7"),
-            Err(AppError::DeviceNotFound(_))
+            Err(CliError::NotFound(_))
         ));
         let d = vec![
             dev("AA:BB", "Lamp", Some(1)),
@@ -669,6 +721,29 @@ mod room_writes {
     }
 
     #[test]
+    fn device_rooms_rows_follow_the_profile_shape() {
+        // name omitted (never null) when the app reports none; no row at all
+        // for a device in no room; `cloud` false for Bluetooth-only.
+        let named = dev("AA", "Lamp", Some(1));
+        let row = device_room_row(&named).unwrap();
+        assert_eq!(row["id"], "H6076_AA");
+        assert_eq!(row["name"], "Lamp");
+        assert_eq!(row["room"], "room1");
+        assert_eq!(row["source"], "govee");
+        assert_eq!(row["cloud"], true);
+        assert_eq!(row["connectivity"], "wifi");
+        let mut unnamed = dev("BB", "  ", Some(1));
+        unnamed.connectivity = Connectivity::Bluetooth;
+        let row = device_room_row(&unnamed).unwrap();
+        assert!(
+            row.get("name").is_none(),
+            "unknown name is omitted, not null"
+        );
+        assert_eq!(row["cloud"], false);
+        assert!(device_room_row(&dev("CC", "Loose", None)).is_none());
+    }
+
+    #[test]
     fn rooms_parse_and_names_validate() {
         let list = json!({"groups": [{"groupId": 5, "groupName": "Kitchen"}, {"groupId": "bad"}]});
         assert_eq!(
@@ -688,5 +763,19 @@ mod room_writes {
         let d = app_devices(&l);
         assert_eq!(d[0].room_id, Some(5));
         assert!(d[1].room_id.is_none() && d[1].room.is_none());
+    }
+}
+
+mod hex_color_boundaries {
+    use govee::cli::light::parse_hex_color;
+
+    #[test]
+    fn multibyte_input_is_a_usage_error_not_a_panic() {
+        // 6 bytes, 5 chars: byte slicing would cut through the "é".
+        assert!(parse_hex_color("A\u{e9}BCD").is_err());
+        // 6 chars, 7 bytes.
+        assert!(parse_hex_color("AB\u{e9}CDE").is_err());
+        assert_eq!(parse_hex_color("#ff8000").unwrap(), (255, 128, 0));
+        assert!(parse_hex_color("GG0000").is_err());
     }
 }

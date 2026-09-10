@@ -1,0 +1,50 @@
+{
+  "message": "success",
+  "status": 200,
+  "groups": [
+    { "groupId": 1001, "groupName": "Office" },
+    { "groupId": 1002, "groupName": "Hallway" }
+  ],
+  "devices": [
+    {
+      "sku": "H60B0",
+      "device": "AA:BB:CC:DD:EE:FF:00:11",
+      "deviceName": "Office Floor Lamp",
+      "groupId": 1001,
+      "deviceExt": {
+        "deviceSettings": "{\"wifiName\":\"ExampleNet\",\"wifiSoftVersion\":\"1.02.03\",\"bleName\":\"ihoment_H60B0_0011\"}",
+        "lastDeviceData": "{\"online\":true}"
+      }
+    },
+    {
+      "sku": "H6008",
+      "device": "11:22:33:44:55:66:77:88",
+      "deviceName": "Hallway Bulb",
+      "groupId": 1002,
+      "deviceExt": {
+        "deviceSettings": "{\"wifiSoftVersion\":\"1.00.10\"}",
+        "lastDeviceData": "{\"online\":true}"
+      }
+    },
+    {
+      "sku": "H617A",
+      "device": "22:33:44:55:66:77:88:99",
+      "deviceName": "Desk Strip",
+      "groupId": 1001,
+      "deviceExt": {
+        "deviceSettings": "{\"bleName\":\"ihoment_H617A_8899\"}",
+        "lastDeviceData": "{}"
+      }
+    },
+    {
+      "sku": "H6076",
+      "device": "33:44:55:66:77:88:99:AA",
+      "deviceName": "Unfiled Panel",
+      "groupId": 0,
+      "deviceExt": {
+        "deviceSettings": "{\"wifiName\":\"ExampleNet\"}",
+        "lastDeviceData": "{}"
+      }
+    }
+  ]
+}

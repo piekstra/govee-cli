@@ -1,4 +1,9 @@
+//! The command tree (SPEC v1 surface + the Govee domain nouns) and the
+//! per-invocation context every handler receives.
+
+pub mod api;
 pub mod auth;
+pub mod config;
 pub mod devices;
 pub mod light;
 pub mod music;
@@ -10,56 +15,143 @@ pub mod segment;
 pub mod toggle;
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
+use pk_cli_config::ConfigStore;
+use pk_cli_core::{CliError, CommonArgs};
+use pk_cli_secrets::CredentialStore;
+use pk_cli_selfupdate::SelfUpdateArgs;
 
-#[derive(Parser)]
-#[command(name = "govee", about = "CLI for Govee smart home devices", version)]
+use crate::api::client::GoveeApi;
+use crate::auth::{account, api_key};
+use crate::config::Config;
+
+#[derive(Parser, Debug)]
+#[command(
+    name = crate::BIN,
+    version,
+    about = "Govee smart-home devices from the terminal (conforms to piekstra-cli/1)",
+    long_about = None
+)]
 pub struct Cli {
-    /// Output as human-readable table instead of JSON
-    #[arg(short, long, global = true)]
-    pub table: bool,
+    #[command(flatten)]
+    pub common: CommonArgs,
 
-    /// Verbose output (show HTTP requests/responses)
-    #[arg(short, long, global = true)]
-    pub verbose: bool,
+    /// Override the config file location.
+    #[arg(long, global = true, value_name = "PATH", env = "GOVEE_CONFIG")]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Accepted for 0.1 compatibility and ignored: text is the default now,
+    /// `--json` selects JSON.
+    #[arg(short = 't', long, global = true, hide = true)]
+    pub table: bool,
 
     #[command(subcommand)]
     pub command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Authentication commands
+    /// Credential management and session status.
     #[command(subcommand)]
     Auth(auth::AuthCommand),
-
-    /// Manage devices
+    /// Non-secret settings.
+    #[command(subcommand)]
+    Config(config::ConfigCommand),
+    /// Devices on the account: list, get, search, capabilities.
     #[command(subcommand)]
     Devices(devices::DevicesCommand),
-
-    /// Control device power
+    /// Power: on, off, toggle, status.
     #[command(subcommand)]
     Power(power::PowerCommand),
-
-    /// Light controls (brightness, color, temperature)
+    /// Light controls: brightness, color, temperature, state.
     #[command(subcommand)]
     Light(light::LightCommand),
-
-    /// Dynamic scene controls
+    /// Dynamic scenes, DIY scenes and snapshots.
     #[command(subcommand)]
     Scene(scene::SceneCommand),
-
-    /// Toggle features (gradient, DreamView)
+    /// Toggle features (gradient, DreamView).
     #[command(subcommand)]
     Toggle(toggle::ToggleCommand),
-
-    /// Segment color and brightness controls
+    /// Per-segment color and brightness.
     #[command(subcommand)]
     Segment(segment::SegmentCommand),
-
-    /// Music mode controls
+    /// Music mode.
     #[command(subcommand)]
     Music(music::MusicCommand),
-    /// Rooms as the Govee Home app has them (account login required)
+    /// Rooms as the Govee Home app has them (needs `auth login-account`).
     #[command(subcommand)]
     Rooms(rooms::RoomsCommand),
+    /// Raw Platform API passthrough: `api GET /user/devices`.
+    Api(api::ApiCommand),
+    /// Update to the latest release from GitHub.
+    SelfUpdate(SelfUpdateArgs),
+    /// Print a shell completion script.
+    Completions { shell: Shell },
+    /// Machine-readable capability discovery (cli-info/v1).
+    Info,
+}
+
+/// What every credentialed handler gets: output mode, the config, and the
+/// stores. Nothing here has touched the keychain or the network yet.
+pub struct Ctx {
+    pub json: bool,
+    pub verbose: bool,
+    pub quiet: bool,
+    /// Prompting is acceptable: stdin is a TTY and no `--json`.
+    pub interactive: bool,
+    pub store: ConfigStore,
+    pub creds: CredentialStore,
+    pub cfg: Config,
+}
+
+impl Ctx {
+    /// A Platform API client, or exit 3 before any network call.
+    pub fn api(&self) -> Result<GoveeApi, CliError> {
+        let (key, _) = api_key::resolve(&self.cfg, &self.creds)?;
+        Ok(GoveeApi::new(key.expose().to_string(), self.verbose)?)
+    }
+
+    /// The app account session if one is configured and stored; `None`
+    /// when no account was ever signed in (no keychain read in that case).
+    pub fn account(&self) -> Result<Option<account::AccountSession>, CliError> {
+        account::load(&self.cfg, &self.creds)
+    }
+
+    /// The app account session, or exit 3 pointing at `auth login-account`.
+    pub fn require_account(&self) -> Result<account::AccountSession, CliError> {
+        account::require(&self.cfg, &self.creds)
+    }
+
+    /// Re-read, edit and save the config file.
+    pub fn update_config(&self, f: impl FnOnce(&mut Config)) -> Result<(), CliError> {
+        let mut cfg: Config = self.store.load()?;
+        f(&mut cfg);
+        self.store.save(&cfg)
+    }
+
+    pub fn note(&self, msg: &str) {
+        if !self.quiet {
+            eprintln!("{msg}");
+        }
+    }
+}
+
+/// Read one line from stdin after a stderr prompt (emails, codes — never
+/// secrets; those go through `Secret::prompt`).
+pub fn prompt_line(label: &str, default: Option<&str>) -> Result<String, CliError> {
+    match default {
+        Some(d) => eprint!("{label} [{d}]: "),
+        None => eprint!("{label}: "),
+    }
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| CliError::Other(format!("reading input: {e}")))?;
+    let line = line.trim().to_string();
+    if line.is_empty() {
+        if let Some(d) = default {
+            return Ok(d.to_string());
+        }
+    }
+    Ok(line)
 }

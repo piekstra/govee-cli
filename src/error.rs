@@ -1,26 +1,33 @@
-use serde_json::json;
+//! Vendor-layer errors, mapped onto the family exit-code contract
+//! (`pk_cli_core::CliError`, SPEC v1 §1.5) at the command boundary via
+//! `From`. The API clients and models speak `AppError`; command handlers
+//! return `CliError`, and `?` does the translation.
+
+use pk_cli_core::CliError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("Not authenticated. Run 'govee login' first.")]
+    /// The Platform API key is missing or was rejected.
+    #[error("no valid Govee API key; run `govee auth login`")]
     NotAuthenticated,
 
-    #[error("Device not found: {0}")]
+    /// The Govee Home account session is missing or was rejected.
+    #[error("no valid Govee account session; run `govee auth login-account`")]
+    AccountNotAuthenticated,
+
+    #[error("{0}")]
     DeviceNotFound(String),
 
-    #[error("API error: {message}")]
+    #[error("{message}")]
     Api {
         message: String,
         error_code: Option<i32>,
     },
 
-    #[error("Rate limit exceeded: {0}")]
+    #[error("rate limit exceeded: {0}")]
     RateLimited(String),
 
-    #[error("Keychain error: {0}")]
-    Keychain(String),
-
-    #[error("Device does not support this operation: {0}")]
+    #[error("device does not support this operation: {0}")]
     UnsupportedOperation(String),
 
     #[error("{0}")]
@@ -36,43 +43,26 @@ pub enum AppError {
     Io(#[from] std::io::Error),
 }
 
-impl AppError {
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            AppError::NotAuthenticated => 2,
-            AppError::DeviceNotFound(_) => 3,
-            AppError::RateLimited(_) => 4,
-            _ => 1,
+impl From<AppError> for CliError {
+    fn from(e: AppError) -> Self {
+        match e {
+            AppError::NotAuthenticated | AppError::AccountNotAuthenticated => {
+                CliError::Auth(e.to_string())
+            }
+            AppError::DeviceNotFound(m) => CliError::NotFound(m),
+            AppError::Api {
+                message,
+                error_code: Some(code),
+            } => CliError::Upstream(format!("{message} (Govee status {code})")),
+            AppError::Api {
+                message,
+                error_code: None,
+            } => CliError::Upstream(message),
+            AppError::RateLimited(_) | AppError::Http(_) => CliError::Upstream(e.to_string()),
+            AppError::UnsupportedOperation(_) | AppError::InvalidInput(_) => {
+                CliError::Usage(e.to_string())
+            }
+            AppError::Json(_) | AppError::Io(_) => CliError::Other(e.to_string()),
         }
-    }
-
-    pub fn error_type(&self) -> &'static str {
-        match self {
-            AppError::NotAuthenticated => "not_authenticated",
-            AppError::DeviceNotFound(_) => "device_not_found",
-            AppError::Api { .. } => "api",
-            AppError::RateLimited(_) => "rate_limited",
-            AppError::Keychain(_) => "keychain",
-            AppError::UnsupportedOperation(_) => "unsupported_operation",
-            AppError::InvalidInput(_) => "invalid_input",
-            AppError::Http(_) => "http",
-            AppError::Json(_) => "json",
-            AppError::Io(_) => "io",
-        }
-    }
-
-    pub fn to_json(&self) -> serde_json::Value {
-        let mut obj = json!({
-            "error": self.error_type(),
-            "message": self.to_string(),
-        });
-        if let AppError::Api {
-            error_code: Some(code),
-            ..
-        } = self
-        {
-            obj["error_code"] = json!(code);
-        }
-        obj
     }
 }

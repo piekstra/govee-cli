@@ -1,11 +1,21 @@
 [package]
-name = "govee"
-version = "0.1.0"
+name = "govee-cli"
+version = "0.2.0"
 edition = "2021"
-description = "CLI for controlling Govee smart home devices via the Govee Platform API"
+rust-version = "1.85"
+description = "Govee smart-home devices from the terminal: lights, scenes and segments over the Platform API, rooms over the Govee Home app's private API. Keychain-secured, agent-friendly."
 license = "GPL-3.0"
 repository = "https://github.com/piekstra/govee-cli"
+homepage = "https://github.com/piekstra/govee-cli"
 readme = "README.md"
+keywords = ["govee", "smart-home", "iot", "lights", "cli"]
+categories = ["command-line-utilities"]
+
+# The library keeps its 0.1 crate name so `govee::…` paths in tests and the
+# binary stay put; only the package is renamed to the family's `<bin>-cli`.
+[lib]
+name = "govee"
+path = "src/lib.rs"
 
 [[bin]]
 name = "govee"
@@ -13,21 +23,27 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+pk-cli-core = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0", features = ["reqwest"] }
+pk-cli-secrets = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-config = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-selfupdate = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-auth = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+pk-cli-http = { git = "https://github.com/piekstra/cli-common", tag = "v0.8.0" }
+# The vendor clients are async; pk-cli-http's blocking client is unused here
+# (only its `ApiArgs`), so the async reqwest client stays.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt"] }
 uuid = { version = "1", features = ["v4"] }
-keyring = "3"
-tabled = "0.17"
-dialoguer = "0.11"
 thiserror = "2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3", features = ["apple-native"] }
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
 
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"

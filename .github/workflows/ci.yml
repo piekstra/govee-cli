@@ -4,57 +4,82 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check
-
-  test:
-    name: Test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test
-
-  fmt:
-    name: Format
+  # fmt + clippy + tests + smoke, all on Linux. Tests are fully offline and
+  # never touch the OS keychain, so nothing here needs a Mac.
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - run: cargo fmt --check
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: linux deps
+        # dbus dev headers for the secret-service keyring backend.
+        run: |
+          # Ubuntu mirrors fail index downloads now and then; retry before giving up.
+          for i in 1 2 3; do sudo apt-get update && break; sleep 15; done
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: fmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: test
+        run: cargo test --all --locked
+      - name: "smoke (offline: version/help/info need no network or creds)"
+        run: |
+          cargo build --release --locked
+          ./target/release/govee --version
+          ./target/release/govee --help > /dev/null
+          ./target/release/govee info > /dev/null
 
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
+  # The only platform-specific sliver is the apple-native keyring backend, so
+  # macOS gets a targeted compile + smoke, not a second copy of the whole
+  # suite (macOS minutes bill at ~10x Linux).
+  macos-smoke:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -- -D warnings
+      - run: |
+          cargo build --release --locked
+          ./target/release/govee --version
+          ./target/release/govee info > /dev/null
+
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # rustsec/audit-check publishes its report through the Checks API.
+      # rustsec/audit-check posts a check run; gitleaks-action comments on
+      # the PR. Neither uploads SARIF, so no security-events scope.
+      checks: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo-audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

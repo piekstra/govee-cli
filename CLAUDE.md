@@ -1,50 +1,24 @@
-# Govee CLI - Development Guide
+# CLAUDE.md
 
-## Project Overview
+The canonical agent guide for this repo is **[AGENTS.md](AGENTS.md)** — read it
+first. It covers build/test/lint, layout, conventions, and the safety rules.
 
-Rust CLI (`govee`) for controlling Govee smart home devices via the official Govee Platform API.
+Claude Code specifics:
 
-## Build & Run
-
-```bash
-cargo build                    # Debug build
-cargo build --release          # Release build
-cargo run -- --help            # Run with args
-cargo run -- devices list      # Example command
-```
-
-## Architecture
-
-```
-src/
-  api/          HTTP client for Govee Platform API
-  auth/         API key management (keychain + env var)
-  cli/          Command handlers (clap-based)
-  models/       Device, capability, and type models
-  config.rs     Runtime configuration
-  error.rs      Error types with exit codes
-  lib.rs        Module wiring and dispatch
-  main.rs       Entry point
-  resolve.rs    Device resolution by name/ID
-```
-
-## Key Patterns
-
-- **Dynamic capabilities**: The Govee API returns what each device can do at runtime. Commands validate capabilities before sending control requests.
-- **Device resolution**: Users can refer to devices by name (exact, case-insensitive, or partial match) or device ID.
-- **JSON-first output**: All commands output JSON to stdout. Errors go to stderr as JSON. Use `--table` for human-readable output.
-- **Exit codes**: 0=success, 1=general error, 2=auth error, 3=device not found, 4=rate limited.
-
-## API Reference
-
-- Base URL: `https://openapi.api.govee.com/router/api/v1`
-- Auth: `Govee-API-Key` header
-- Rate limits: 10K/day, per-minute limits
-- See wiki for full API documentation
-
-## Adding a New Device Type
-
-1. Add SKU to `DeviceType` enum in `models/device_type.rs`
-2. Add SKU prefix to `SKU_MAP`
-3. Update `category()` and `display_name()` methods
-4. No other changes needed - capabilities are detected dynamically
+- **Gate on `make verify`.** Don't report a change as done until it's green
+  (fmt + clippy `-D warnings` + tests + smoke). Tests are fully offline and
+  never touch the keychain.
+- **Never run `auth login-account` to "test" it.** It emails a real
+  verification code to the owner's Govee account. `auth login` verifies a
+  key against the live API; only run it when the owner asks.
+- **Writes act on a real account.** `rooms move|create|rename|delete` change
+  the owner's Govee Home rooms; device control commands change real lights.
+  Don't run them to "test"; the logic is unit-tested against fixtures.
+- **Secrets:** the API key and the account bearer live in the OS keychain
+  (`piekstra.govee`). Never print them, put them on argv, or write them to a
+  file. A freshly built binary reading the keychain is a macOS prompt — keep
+  tests and local checks on the config-gated, credential-free paths.
+- **"Deployed" means released + installed.** A change isn't live until the
+  release workflow ships it and the binary is installed or `self-update`d.
+- **Public repo, private home.** No real emails, device ids, keys, or tokens
+  in any diff — fixtures included (dummies only).
