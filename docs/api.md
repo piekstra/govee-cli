@@ -162,8 +162,10 @@ data}`.
 - These rooms are the Govee app's. Google Home keeps its own room per device
   and only honours Govee's `roomHint` when the device is new to it; moving a
   device here does not move it in Google Home. `rooms devices` emits
-  `device-rooms/v1` (`id` = `<SKU>_<MAC>`, `room`, `cloud`, `connectivity`)
-  so `ghome audit --expect -` can compare the two.
+  `device-rooms/v1` (`id` = `<SKU>_<MAC>`, `room` (omitted, never null, for
+  a device the app files in no room), `cloud`, `connectivity`) so `ghome
+  audit --expect -` can compare the two and report the roomless ones as
+  `unfiled`.
 
 ## Keychain layout and the 0.1 migration
 
