@@ -82,8 +82,11 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   write responses prove nothing.
 - **`rooms devices` is the `smart-home/v1` profile's `device-rooms/v1`**
   (cli-common DESIGN.md §1.8): `id` = `<SKU>_<MAC>`, `name` omitted when
-  unknown (never null), `room`, `source: "govee"`, `cloud`, `connectivity`.
-  `ghome audit --expect -` joins on it; don't reshape it without the profile.
+  unknown (never null), `room` omitted when the app files the device in no
+  room (never null; the profile relaxed `room` within v1, so no `/v2` bump),
+  `source: "govee"`, `cloud`, `connectivity`. `ghome audit --expect -` joins
+  on it and reports a roomless row as `unfiled`; don't reshape it without
+  the profile.
 - **Room writes send whole collections.** `PUT /group/edit` carries a room's
   complete membership and `groups/manage` the complete remaining room list;
   both are computed from a fresh read *after* the prompt, never from the
