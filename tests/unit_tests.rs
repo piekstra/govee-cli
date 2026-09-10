@@ -722,10 +722,10 @@ mod room_writes {
 
     #[test]
     fn device_rooms_rows_follow_the_profile_shape() {
-        // name omitted (never null) when the app reports none; no row at all
-        // for a device in no room; `cloud` false for Bluetooth-only.
+        // name omitted (never null) when the app reports none; `room` omitted
+        // for a device the app files nowhere; `cloud` false for Bluetooth-only.
         let named = dev("AA", "Lamp", Some(1));
-        let row = device_room_row(&named).unwrap();
+        let row = device_room_row(&named);
         assert_eq!(row["id"], "H6076_AA");
         assert_eq!(row["name"], "Lamp");
         assert_eq!(row["room"], "room1");
@@ -734,13 +734,16 @@ mod room_writes {
         assert_eq!(row["connectivity"], "wifi");
         let mut unnamed = dev("BB", "  ", Some(1));
         unnamed.connectivity = Connectivity::Bluetooth;
-        let row = device_room_row(&unnamed).unwrap();
+        let row = device_room_row(&unnamed);
         assert!(
             row.get("name").is_none(),
             "unknown name is omitted, not null"
         );
         assert_eq!(row["cloud"], false);
-        assert!(device_room_row(&dev("CC", "Loose", None)).is_none());
+        let loose = device_room_row(&dev("CC", "Loose", None));
+        assert_eq!(loose["id"], "H6076_CC");
+        assert_eq!(loose["name"], "Loose");
+        assert!(loose.get("room").is_none(), "no room is omitted, not null");
     }
 
     #[test]

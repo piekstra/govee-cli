@@ -141,18 +141,20 @@ pub fn find_device<'a>(devices: &'a [AppDevice], q: &str) -> Result<&'a AppDevic
 /// One `device-rooms/v1` row: `id` is `<SKU>_<MAC>` (what Google Home sees),
 /// `name` is omitted — never null — when the app reports none, and `cloud`
 /// is false for the Bluetooth-only devices an assistant can never see.
-/// Devices in no room have no row.
-pub fn device_room_row(d: &AppDevice) -> Option<Value> {
-    let room = d.room.clone()?;
+/// A device the app files in no room keeps its row with `room` omitted, so
+/// a consumer can report the gap instead of never hearing of the device.
+pub fn device_room_row(d: &AppDevice) -> Value {
     let mut row = json!({ "id": format!("{}_{}", d.sku, d.device) });
     if !d.name.trim().is_empty() {
         row["name"] = json!(d.name);
     }
-    row["room"] = json!(room);
+    if let Some(room) = &d.room {
+        row["room"] = json!(room);
+    }
     row["source"] = json!("govee");
     row["cloud"] = json!(d.connectivity == Connectivity::Wifi);
     row["connectivity"] = json!(d.connectivity);
-    Some(row)
+    row
 }
 
 fn accepted_but(msg: &str) -> CliError {
@@ -228,7 +230,7 @@ pub async fn handle(ctx: &Ctx, cmd: &RoomsCommand) -> Result<(), CliError> {
             Ok(())
         }
         RoomsCommand::Devices => {
-            let items: Vec<Value> = devices.iter().filter_map(device_room_row).collect();
+            let items: Vec<Value> = devices.iter().map(device_room_row).collect();
             // The smart-home/v1 profile's shape (SPEC §1.8), so the name is
             // `device-rooms/v1` rather than a `<record>-list`.
             output::emit(ctx.json, "device-rooms", json!({ "items": items }), |v| {
