@@ -136,37 +136,6 @@ impl Ctx {
     }
 }
 
-/// The mutation gate (SPEC §1.3). Call **before** any credential or network
-/// work: with `--force` it passes; non-interactive without it is exit 6, so
-/// a driver never hangs on a prompt.
-pub fn require_confirmable(force: bool, interactive: bool, what: &str) -> Result<(), CliError> {
-    if force || interactive {
-        Ok(())
-    } else {
-        Err(CliError::ConfirmationRequired(format!(
-            "{what} — pass --force to run non-interactively"
-        )))
-    }
-}
-
-/// Interactive yes/no on stderr; only reached when `require_confirmable`
-/// passed without `--force`.
-pub fn confirm(force: bool, prompt: &str) -> Result<(), CliError> {
-    if force {
-        return Ok(());
-    }
-    eprint!("{prompt} [y/N] ");
-    let mut line = String::new();
-    std::io::stdin()
-        .read_line(&mut line)
-        .map_err(|e| CliError::Other(format!("reading confirmation: {e}")))?;
-    if matches!(line.trim().to_lowercase().as_str(), "y" | "yes") {
-        Ok(())
-    } else {
-        Err(CliError::ConfirmationRequired("cancelled".into()))
-    }
-}
-
 /// Read one line from stdin after a stderr prompt (emails, codes — never
 /// secrets; those go through `Secret::prompt`).
 pub fn prompt_line(label: &str, default: Option<&str>) -> Result<String, CliError> {

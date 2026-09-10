@@ -596,11 +596,10 @@ mod app_view {
 mod room_writes {
     use govee::api::app::{app_devices, AppDevice, Connectivity};
     use govee::cli::rooms::{
-        find_device, find_room, members_of, membership_with, placed_in, rooms_of,
+        device_room_row, find_device, find_room, members_of, membership_with, placed_in, rooms_of,
         validate_room_name, Room,
     };
-    use govee::error::AppError;
-    use govee::resolve::pick;
+    use pk_cli_core::{resolve::pick, CliError};
     use serde_json::json;
 
     fn rooms() -> Vec<Room> {
@@ -644,14 +643,8 @@ mod room_writes {
         assert_eq!(find_room(&r, "guest").unwrap().id, 3);
         // An exact case-insensitive match wins before partials get a say.
         assert_eq!(find_room(&r, "bathroom").unwrap().id, 4);
-        assert!(matches!(
-            find_room(&r, "attic"),
-            Err(AppError::DeviceNotFound(_))
-        ));
-        assert!(matches!(
-            find_room(&r, "room"),
-            Err(AppError::DeviceNotFound(_))
-        ));
+        assert!(matches!(find_room(&r, "attic"), Err(CliError::NotFound(_))));
+        assert!(matches!(find_room(&r, "room"), Err(CliError::NotFound(_))));
         let twins = vec![
             Room {
                 id: 9,
@@ -664,7 +657,7 @@ mod room_writes {
         ];
         assert!(matches!(
             find_room(&twins, "Den"),
-            Err(AppError::DeviceNotFound(_))
+            Err(CliError::NotFound(_))
         ));
         // Duplicate ids are ambiguous too, never a silent first pick.
         let dup_ids = vec![
@@ -679,7 +672,7 @@ mod room_writes {
         ];
         assert!(matches!(
             find_room(&dup_ids, "7"),
-            Err(AppError::DeviceNotFound(_))
+            Err(CliError::NotFound(_))
         ));
         let d = vec![
             dev("AA:BB", "Lamp", Some(1)),
@@ -725,6 +718,29 @@ mod room_writes {
         assert!(placed_in(&d, "AA", 1));
         assert!(!placed_in(&d, "AA", 2));
         assert!(!placed_in(&d, "DD", 1));
+    }
+
+    #[test]
+    fn device_rooms_rows_follow_the_profile_shape() {
+        // name omitted (never null) when the app reports none; no row at all
+        // for a device in no room; `cloud` false for Bluetooth-only.
+        let named = dev("AA", "Lamp", Some(1));
+        let row = device_room_row(&named).unwrap();
+        assert_eq!(row["id"], "H6076_AA");
+        assert_eq!(row["name"], "Lamp");
+        assert_eq!(row["room"], "room1");
+        assert_eq!(row["source"], "govee");
+        assert_eq!(row["cloud"], true);
+        assert_eq!(row["connectivity"], "wifi");
+        let mut unnamed = dev("BB", "  ", Some(1));
+        unnamed.connectivity = Connectivity::Bluetooth;
+        let row = device_room_row(&unnamed).unwrap();
+        assert!(
+            row.get("name").is_none(),
+            "unknown name is omitted, not null"
+        );
+        assert_eq!(row["cloud"], false);
+        assert!(device_room_row(&dev("CC", "Loose", None)).is_none());
     }
 
     #[test]

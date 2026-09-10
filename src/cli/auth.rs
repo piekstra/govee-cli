@@ -4,16 +4,16 @@
 
 use clap::Subcommand;
 use pk_cli_auth::{AuthMethod, AuthStatus, LoginArgs, LogoutArgs, SetCredentialArgs};
-use pk_cli_core::{output, CliError};
+use pk_cli_core::output::{self, emit_one};
+use pk_cli_core::CliError;
 use pk_cli_secrets::{read_stdin, Secret};
 use serde_json::json;
 
-use super::output::emit_one;
 use super::{prompt_line, Ctx};
 use crate::api::app::{GoveeApp, LoginOutcome};
 use crate::api::client::GoveeApi;
 use crate::auth::account::{self, AccountSession};
-use crate::auth::{api_key, legacy, API_KEY_ITEM};
+use crate::auth::{api_key, legacy, ACCOUNT_ITEM, API_KEY_ITEM};
 
 #[derive(Subcommand, Debug)]
 pub enum AuthCommand {
@@ -63,39 +63,39 @@ pub async fn handle(ctx: &Ctx, cmd: &AuthCommand) -> Result<(), CliError> {
 
 /// Move 0.1's keychain entries (service `govee-cli`) and record them in the
 /// config so the gated reads find them. Reports what moved on stderr.
-fn migrate_legacy(ctx: &Ctx) -> Result<legacy::Migrated, CliError> {
-    let moved = legacy::migrate(
-        &ctx.creds,
-        legacy::Wanted {
-            api_key: !ctx.cfg.api_key_in_keychain,
-            account: ctx.cfg.username.is_none(),
-        },
-    )?;
-    if moved.any() {
-        let email = moved.account.as_ref().map(|a| a.email.clone());
-        let key_moved = moved.api_key.is_some();
-        ctx.update_config(|c| {
-            if key_moved {
-                c.api_key_in_keychain = true;
-            }
-            if let Some(e) = email {
-                c.username = Some(e);
-            }
-        })?;
-        if key_moved {
-            ctx.note(&format!(
-                "moved the API key stored by govee-cli 0.1 (keychain service `{}`) to `{}`",
-                legacy::LEGACY_SERVICE,
-                ctx.creds.service()
-            ));
+fn migrate_legacy(ctx: &Ctx) -> Result<legacy::Moved, CliError> {
+    let moved = legacy::migrate(&ctx.creds)?;
+    if !moved.any() {
+        return Ok(moved);
+    }
+    // The moved session names the account the config must record.
+    let email = if moved.account {
+        ctx.creds
+            .get_json::<AccountSession>(ACCOUNT_ITEM)?
+            .map(|s| s.email)
+    } else {
+        None
+    };
+    ctx.update_config(|c| {
+        if moved.api_key {
+            c.api_key_in_keychain = true;
         }
-        if let Some(a) = &moved.account {
-            ctx.note(&format!(
-                "moved the Govee account session for {} to `{}`",
-                a.email,
-                ctx.creds.service()
-            ));
+        if let Some(e) = email.clone() {
+            c.username = Some(e);
         }
+    })?;
+    if moved.api_key {
+        ctx.note(&format!(
+            "moved the API key stored by govee-cli 0.1 (keychain service `{}`) to `{}`",
+            legacy::LEGACY_SERVICE,
+            ctx.creds.service()
+        ));
+    }
+    if let Some(e) = &email {
+        ctx.note(&format!(
+            "moved the Govee account session for {e} to `{}`",
+            ctx.creds.service()
+        ));
     }
     Ok(moved)
 }
@@ -118,14 +118,16 @@ async fn login(ctx: &Ctx, args: &LoginArgs) -> Result<(), CliError> {
     }
     // Upgrade path: at a terminal with nothing configured yet, a key stored
     // by 0.1 is moved instead of asked for again.
-    if !ctx.cfg.api_key_in_keychain && !explicit && ctx.interactive {
-        let moved = migrate_legacy(ctx)?;
-        if let Some(key) = &moved.api_key {
-            if !args.no_verify {
-                verify_key(ctx, key).await?;
-            }
-            return Ok(());
+    if !ctx.cfg.api_key_in_keychain && !explicit && ctx.interactive && migrate_legacy(ctx)?.api_key
+    {
+        if !args.no_verify {
+            // Just written by this binary, so reading it back is prompt-free.
+            let key = ctx.creds.get(API_KEY_ITEM)?.ok_or_else(|| {
+                CliError::Keychain("the moved API key could not be read back".into())
+            })?;
+            verify_key(ctx, &key).await?;
         }
+        return Ok(());
     }
     if ctx.cfg.api_key_in_keychain && ctx.creds.get(API_KEY_ITEM)?.is_some() && !args.overwrite {
         return Err(CliError::Usage(
@@ -259,12 +261,9 @@ async fn login_account(
     // remembered email — from the new store, or moved from 0.1's.
     let mut existing = ctx.account()?;
     let mut migrated = false;
-    if existing.is_none() && ctx.cfg.username.is_none() {
-        let moved = migrate_legacy(ctx)?;
-        if moved.account.is_some() {
-            existing = moved.account;
-            migrated = true;
-        }
+    if existing.is_none() && ctx.cfg.username.is_none() && migrate_legacy(ctx)?.account {
+        existing = ctx.creds.get_json(ACCOUNT_ITEM)?;
+        migrated = true;
     }
     if let (true, None, Some(s)) = (migrated, code, existing.as_ref()) {
         if s.signed_in() {

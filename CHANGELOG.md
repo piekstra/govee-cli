@@ -4,7 +4,9 @@
 
 **Breaking.** `govee` now conforms to
 [piekstra-cli spec v1](https://github.com/piekstra/cli-common/blob/main/DESIGN.md)
-and is built on the shared `pk-cli-*` crates (cli-common v0.7.0).
+and is built on the shared `pk-cli-*` crates (cli-common v0.8.0): output
+and error contract, secrets, config, self-update, the confirmation gate,
+and the reference-resolution ladder all come from there.
 
 ### Breaking changes
 
@@ -23,9 +25,9 @@ and is built on the shared `pk-cli-*` crates (cli-common v0.7.0).
   `api_key` and `account`, unchanged). Run `govee auth login` once at a
   terminal after upgrading: it moves both entries instead of asking for the
   key again (`auth login-account` does the same for the account session).
-  Entries you replace by hand stay under `govee-cli` and can be removed with
-  Keychain Access. Until one of those runs, credentialed commands report
-  exit 3 with a pointer at `auth login`.
+  An entry you already stored by hand under the new service wins, and the
+  legacy copy is retired either way. Until one of those runs, credentialed
+  commands report exit 3 with a pointer at `auth login`.
 - **`auth logout` no longer removes the API key.** It clears the account
   session; `auth logout --forget` removes the key and the config file (SPEC
   semantics). `auth logout-account` is unchanged.
@@ -37,6 +39,12 @@ and is built on the shared `pk-cli-*` crates (cli-common v0.7.0).
 - **`auth status` is offline** and emits `auth-status/v1` (0.1 fetched the
   device list). It reports `key_source` (`env`/`keychain`) and an
   `account_session` object as extra fields.
+- **Device references resolve by the family ladder** (exact name, exact id
+  case-insensitively, case-insensitive name, unique partial name); a tie at
+  any tier is exit 4 naming the candidates, and an empty reference is exit
+  2. `devices search` no longer echoes the query in its DTO.
+- **`rooms devices` follows the documented `device-rooms/v1`** (smart-home/v1
+  profile): `name` is omitted when the app reports none, never null.
 - Package renamed `govee` → `govee-cli` (the binary is still `govee`; the
   library crate keeps the name `govee`). Release assets are now
   `govee-<target-triple>.tar.gz` + `.sha256` for `aarch64-apple-darwin`,

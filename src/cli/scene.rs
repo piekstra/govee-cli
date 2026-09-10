@@ -2,7 +2,9 @@ use clap::Subcommand;
 use pk_cli_core::CliError;
 use serde_json::{json, Value};
 
-use super::output::{emit_list, emit_one};
+use pk_cli_core::output::emit_one;
+
+use super::output::emit_list_with;
 use super::Ctx;
 use crate::error::AppError;
 use crate::models::device::Device;
@@ -58,20 +60,20 @@ pub async fn handle(ctx: &Ctx, cmd: &SceneCommand) -> Result<(), CliError> {
             let dev = resolve::resolve_device(&api, device).await?;
             let scenes = dev.get_scenes().await?;
             let items = extract_scene_names_for_instance(&scenes, "lightScene");
-            emit_named_list(ctx, "scene-list", dev.name(), items);
+            emit_named_list(ctx, "scene", dev.name(), items);
         }
         SceneCommand::ListDiy { device } => {
             let dev = resolve::resolve_device(&api, device).await?;
             let scenes = dev.get_diy_scenes().await?;
             let items = extract_scene_names(&scenes);
-            emit_named_list(ctx, "diy-scene-list", dev.name(), items);
+            emit_named_list(ctx, "diy-scene", dev.name(), items);
         }
         SceneCommand::ListSnapshots { device } => {
             let dev = resolve::resolve_device(&api, device).await?;
             require_snapshots(&dev)?;
             let scenes = dev.get_scenes().await?;
             let items = extract_scene_names_for_instance(&scenes, "snapshot");
-            emit_named_list(ctx, "snapshot-list", dev.name(), items);
+            emit_named_list(ctx, "snapshot", dev.name(), items);
         }
         SceneCommand::Activate { device, name } => {
             let dev = resolve::resolve_device(&api, device).await?;
@@ -102,11 +104,12 @@ pub async fn handle(ctx: &Ctx, cmd: &SceneCommand) -> Result<(), CliError> {
     Ok(())
 }
 
-fn emit_named_list(ctx: &Ctx, schema: &str, device: &str, items: Vec<Value>) {
-    emit_list(
+fn emit_named_list(ctx: &Ctx, record: &str, device: &str, items: Vec<Value>) {
+    emit_list_with(
         ctx.json,
-        schema,
-        json!({ "device": device, "items": items }),
+        record,
+        &[("device", json!(device))],
+        items,
         &["name"],
     );
 }

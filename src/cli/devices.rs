@@ -1,8 +1,9 @@
 use clap::Subcommand;
+use pk_cli_core::output::{emit_list, emit_one};
+use pk_cli_core::resolve::pick;
 use pk_cli_core::CliError;
 use serde_json::{json, Value};
 
-use super::output::{emit_list, emit_one};
 use super::Ctx;
 use crate::api::app::{self, AppDevice, GoveeApp, PlatformDevice};
 use crate::error::AppError;
@@ -105,7 +106,7 @@ async fn list(ctx: &Ctx) -> Result<(), CliError> {
         .iter()
         .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
         .collect();
-    emit_list(ctx.json, "device-list", json!({ "items": items }), COLUMNS);
+    emit_list(ctx.json, "device", items, COLUMNS);
     Ok(())
 }
 
@@ -133,33 +134,27 @@ async fn get(ctx: &Ctx, device: &str) -> Result<(), CliError> {
         }
         // Not on the Platform API: it may be one of the app's Bluetooth-only
         // devices, which `devices list` shows and this command must honour.
-        Err(AppError::DeviceNotFound(reason)) => {
+        // Same ladder, over the app-only rows; with no app view the Platform
+        // verdict stands.
+        Err(CliError::NotFound(reason)) => {
             let rows = app::merge_app_view(&[], app.as_deref());
-            let want = device.trim().to_lowercase();
-            let hit = rows
-                .iter()
-                .find(|r| {
-                    r.name.to_lowercase() == want
-                        || format!("{}_{}", r.sku, r.device).to_lowercase() == want
-                })
-                .or_else(|| {
-                    let partial: Vec<_> = rows
-                        .iter()
-                        .filter(|r| r.name.to_lowercase().contains(&want))
-                        .collect();
-                    if partial.len() == 1 {
-                        Some(partial[0])
-                    } else {
-                        None
-                    }
-                })
-                .ok_or(AppError::DeviceNotFound(reason))?;
+            let hit = match pick(
+                &rows,
+                device,
+                |r| vec![format!("{}_{}", r.sku, r.device), r.device.clone()],
+                |r| &r.name,
+                "device",
+            ) {
+                Ok(hit) => hit,
+                Err(_) if rows.is_empty() => return Err(CliError::NotFound(reason)),
+                Err(e) => return Err(e),
+            };
             let mut v = serde_json::to_value(hit).map_err(AppError::from)?;
             v["capabilities"] = json!([]);
             emit_one(ctx.json, "device", v);
             Ok(())
         }
-        Err(e) => Err(e.into()),
+        Err(e) => Err(e),
     }
 }
 
@@ -181,8 +176,8 @@ async fn search(ctx: &Ctx, query: &str) -> Result<(), CliError> {
         .collect();
     emit_list(
         ctx.json,
-        "device-list",
-        json!({ "query": query, "items": items }),
+        "device",
+        items,
         &["name", "device", "sku", "type"],
     );
     Ok(())

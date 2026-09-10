@@ -170,8 +170,9 @@ data}`.
 `piekstra.govee` holds `api_key` (the Platform key, as-is) and `account` (the
 session blob above). Version 0.1 kept the same two items under the service
 `govee-cli`; `auth login` and `auth login-account` move them on first use
-(read old → write new → delete old) and record the result in the config,
-after which the legacy service is never probed again. Read paths never probe
-it: a keychain read from a freshly built binary is a macOS prompt, and the
-config gate exists so that a machine with nothing configured exits 3 without
-one.
+(`CredentialStore::migrate_from`: read old → write new → delete old; an
+item already stored under `piekstra.govee` wins and the legacy copy is
+still retired) and record the result in the config, after which the legacy
+service is never probed again. Read paths never probe it: a keychain read
+from a freshly built binary is a macOS prompt, and the config gate exists so
+that a machine with nothing configured exits 3 without one.

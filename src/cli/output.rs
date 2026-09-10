@@ -1,34 +1,37 @@
-//! Thin wrappers over `pk_cli_core::output` for the two shapes every
-//! command emits: one resource (a key/value block) or a list (`items` under
-//! a pipe table, any scalar context fields printed above it).
+//! One composition over `pk_cli_core::output` for the lists that carry
+//! scalar context alongside their rows (the device a scene list belongs to,
+//! the count of room-less devices). Plain lists and single resources use
+//! `output::emit_list` / `output::emit_one` directly.
 
 use pk_cli_core::output;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-/// One resource: the DTO in JSON mode, a `key: value` block otherwise.
-pub fn emit_one(json: bool, schema: &str, value: Value) {
-    output::emit(json, schema, value, |v| output::kv(v, 0));
-}
-
-/// A list: `{"items": [...], ...}` in JSON mode; in text mode the non-list
-/// fields as `key: value` lines, then a table of `columns` (every column
-/// when empty).
-pub fn emit_list(json: bool, schema: &str, payload: Value, columns: &[&str]) {
-    output::emit(json, schema, payload, |v| {
-        if let Some(obj) = v.as_object() {
-            for (k, val) in obj {
-                if k != "items" && !val.is_array() && !val.is_object() {
+/// `{"schema": "<record>-list/v1", <context…>, "items": [...]}` in JSON
+/// mode; the context as `key: value` lines and then a `columns` table of
+/// the items in text mode.
+pub fn emit_list_with(
+    json: bool,
+    record: &str,
+    context: &[(&str, Value)],
+    items: Vec<Value>,
+    columns: &[&str],
+) {
+    let mut payload = Map::new();
+    for (k, v) in context {
+        payload.insert((*k).to_string(), v.clone());
+    }
+    payload.insert("items".into(), Value::Array(items));
+    output::emit(
+        json,
+        &format!("{record}-list"),
+        Value::Object(payload),
+        |v| {
+            for (k, _) in context {
+                if let Some(val) = v.get(*k) {
                     println!("{k}: {}", output::scalar(val));
                 }
             }
-        }
-        let rows = output::rows_of(v, "items");
-        if rows.is_empty() {
-            println!("(none)");
-        } else if columns.is_empty() {
-            output::table(&rows);
-        } else {
-            output::table(&output::table_view(&rows, columns));
-        }
-    });
+            output::table(&output::table_view(&output::rows_of(v, "items"), columns));
+        },
+    );
 }

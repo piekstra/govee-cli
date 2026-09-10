@@ -2,7 +2,9 @@ use clap::Subcommand;
 use pk_cli_core::CliError;
 use serde_json::json;
 
-use super::output::{emit_list, emit_one};
+use pk_cli_core::output::emit_one;
+
+use super::output::emit_list_with;
 use super::Ctx;
 use crate::error::AppError;
 use crate::resolve;
@@ -85,10 +87,11 @@ pub async fn handle(ctx: &Ctx, cmd: &ToggleCommand) -> Result<(), CliError> {
                 .filter(|c| c.capability_type == "devices.capabilities.toggle")
                 .map(|c| json!({ "toggle": c.instance }))
                 .collect();
-            emit_list(
+            emit_list_with(
                 ctx.json,
-                "toggle-list",
-                json!({ "device": dev.name(), "items": items }),
+                "toggle",
+                &[("device", json!(dev.name()))],
+                items,
                 &["toggle"],
             );
         }

@@ -4,14 +4,16 @@
 //! any credential is read) and is verified by re-reading the device list.
 
 use clap::Subcommand;
+use pk_cli_core::confirm::{confirm, require_confirmable};
+use pk_cli_core::output::{self, emit_one};
+use pk_cli_core::resolve::pick;
 use pk_cli_core::CliError;
 use serde_json::{json, Value};
 
-use super::output::{emit_list, emit_one};
-use super::{confirm, require_confirmable, Ctx};
+use super::output::emit_list_with;
+use super::Ctx;
 use crate::api::app::{app_devices, AppDevice, Connectivity, GoveeApp};
 use crate::error::AppError;
-use crate::resolve::pick;
 
 #[derive(Subcommand, Debug)]
 pub enum RoomsCommand {
@@ -122,11 +124,11 @@ pub fn placed_in(devices: &[AppDevice], device: &str, group_id: i64) -> bool {
         .any(|d| d.device == device && d.room_id == Some(group_id))
 }
 
-pub fn find_room<'a>(rooms: &'a [Room], q: &str) -> Result<&'a Room, AppError> {
+pub fn find_room<'a>(rooms: &'a [Room], q: &str) -> Result<&'a Room, CliError> {
     pick(rooms, q, |r| vec![r.id.to_string()], |r| &r.name, "room")
 }
 
-pub fn find_device<'a>(devices: &'a [AppDevice], q: &str) -> Result<&'a AppDevice, AppError> {
+pub fn find_device<'a>(devices: &'a [AppDevice], q: &str) -> Result<&'a AppDevice, CliError> {
     pick(
         devices,
         q,
@@ -136,13 +138,31 @@ pub fn find_device<'a>(devices: &'a [AppDevice], q: &str) -> Result<&'a AppDevic
     )
 }
 
+/// One `device-rooms/v1` row: `id` is `<SKU>_<MAC>` (what Google Home sees),
+/// `name` is omitted — never null — when the app reports none, and `cloud`
+/// is false for the Bluetooth-only devices an assistant can never see.
+/// Devices in no room have no row.
+pub fn device_room_row(d: &AppDevice) -> Option<Value> {
+    let room = d.room.clone()?;
+    let mut row = json!({ "id": format!("{}_{}", d.sku, d.device) });
+    if !d.name.trim().is_empty() {
+        row["name"] = json!(d.name);
+    }
+    row["room"] = json!(room);
+    row["source"] = json!("govee");
+    row["cloud"] = json!(d.connectivity == Connectivity::Wifi);
+    row["connectivity"] = json!(d.connectivity);
+    Some(row)
+}
+
 fn accepted_but(msg: &str) -> CliError {
     CliError::Upstream(format!("Govee accepted the write but {msg} on read-back"))
 }
 
 /// Argument and confirmation gates that need no credential: bad input is
 /// exit 2, a non-interactive write without `--force` is exit 6 — both
-/// before the keychain or the network.
+/// before the keychain or the network (`pk_cli_core::confirm`'s ordering
+/// rule).
 pub fn validate(cmd: &RoomsCommand, interactive: bool) -> Result<(), CliError> {
     match cmd {
         RoomsCommand::List | RoomsCommand::Devices => Ok(()),
@@ -198,35 +218,25 @@ pub async fn handle(ctx: &Ctx, cmd: &RoomsCommand) -> Result<(), CliError> {
                 })
                 .collect();
             let without = devices.iter().filter(|d| d.room_id.is_none()).count();
-            emit_list(
+            emit_list_with(
                 ctx.json,
-                "room-list",
-                json!({ "items": items, "devices_without_room": without }),
+                "room",
+                &[("devices_without_room", json!(without))],
+                items,
                 &["room_id", "name", "devices"],
             );
             Ok(())
         }
         RoomsCommand::Devices => {
-            let items: Vec<Value> = devices
-                .iter()
-                .filter_map(|d| {
-                    let room = d.room.clone()?;
-                    Some(json!({
-                        "id": format!("{}_{}", d.sku, d.device),
-                        "name": d.name,
-                        "room": room,
-                        "source": "govee",
-                        "cloud": d.connectivity == Connectivity::Wifi,
-                        "connectivity": d.connectivity,
-                    }))
-                })
-                .collect();
-            emit_list(
-                ctx.json,
-                "device-rooms",
-                json!({ "items": items }),
-                &["id", "name", "room", "connectivity"],
-            );
+            let items: Vec<Value> = devices.iter().filter_map(device_room_row).collect();
+            // The smart-home/v1 profile's shape (SPEC §1.8), so the name is
+            // `device-rooms/v1` rather than a `<record>-list`.
+            output::emit(ctx.json, "device-rooms", json!({ "items": items }), |v| {
+                output::table(&output::table_view(
+                    &output::rows_of(v, "items"),
+                    &["id", "name", "room", "connectivity"],
+                ));
+            });
             Ok(())
         }
         RoomsCommand::Move {

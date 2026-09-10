@@ -9,9 +9,9 @@ Guidance for AI coding agents (and humans) working in this repo. Tool-agnostic;
 (device control: `openapi.api.govee.com`) and the Govee Home app's **private
 API** (rooms and the account login: `app2.govee.com`). A thin, Govee-specific
 layer over the shared [`cli-common`](https://github.com/piekstra/cli-common)
-`pk-cli-*` crates (auth shapes, config, secrets, self-update, output,
-exit codes). This repo owns only the two clients, the device models, and the
-commands.
+`pk-cli-*` crates (auth shapes, config, secrets, self-update, output, exit
+codes, the confirmation gate, reference resolution). This repo owns only the
+two clients, the device models, and the commands.
 
 ## Build, test, lint
 
@@ -29,18 +29,21 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   `completions`, `info`), then the async runtime for everything that talks
   to Govee. `src/main.rs` is `parse` + `output::fail`.
 - `src/cli/mod.rs` — the clap tree (`CommonArgs` + `--config` + the hidden
-  0.1 `--table`), `Ctx` (the credential gates), and the confirmation
-  helpers. One module per command group under `src/cli/`.
+  0.1 `--table`) and `Ctx` (the credential gates). One module per command
+  group under `src/cli/`; `src/cli/output.rs` is the one local composition
+  over `pk_cli_core::output` (a list with scalar context).
 - `src/auth/` — `api_key` (env → config gate → keychain), `account` (the app
-  session blob), `legacy` (the one-time move from 0.1's `govee-cli`
-  keychain service).
+  session as one JSON keychain item, `get_json`/`set_json`), `legacy` (the
+  one-time move from 0.1's `govee-cli` service via
+  `CredentialStore::migrate_from`).
 - `src/api/client.rs` — the Platform API (async reqwest, `Govee-API-Key`
   header, the `{code, message, data}` envelope). `src/api/app.rs` — the app
   API: login with emailed code, device list with rooms/connectivity, the room
   writes, and the Platform/app merge.
 - `src/models/` — device info, capabilities, SKU → type table, and the
   value validators (`validate_brightness` etc.).
-- `src/resolve.rs` — name/id resolution ladder (`resolve_device`, `pick`).
+- `src/resolve.rs` — the Platform device list and `resolve_device` over
+  `pk_cli_core::resolve::pick` (the family ladder; ties are exit 4).
 - `src/config.rs` — the on-disk config: `username` and the
   `api_key_in_keychain` marker.
 - `src/error.rs` — `AppError` (vendor layer) and its `From` into
@@ -59,9 +62,10 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   confirmation required. Every vendor error goes through `AppError` →
   `CliError`; never `process::exit` elsewhere.
 - **Validate before the keychain.** Argument checks (`validate` in each
-  command module) and the `require_confirmable` gate run before `Ctx::api()`
-  / `Ctx::require_account()`, so `--help`, bad input, and a headless write
-  without `--force` never prompt or hang.
+  command module) and `pk_cli_core::confirm::require_confirmable` run before
+  `Ctx::api()` / `Ctx::require_account()`, so `--help`, bad input, and a
+  headless write without `--force` never prompt or hang. The `confirm`
+  prompt itself comes after the reads that produce the names in it.
 - **The keychain is read only when the config says there is something to
   read.** `api_key_in_keychain` gates the API key; `username` gates the
   account session. `$GOVEE_API_KEY` bypasses the keychain entirely. The
@@ -76,6 +80,10 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   prompt unless `--force`, exit 6 non-interactively *before* any network
   call, and read the device list back before reporting success — the app's
   write responses prove nothing.
+- **`rooms devices` is the `smart-home/v1` profile's `device-rooms/v1`**
+  (cli-common DESIGN.md §1.8): `id` = `<SKU>_<MAC>`, `name` omitted when
+  unknown (never null), `room`, `source: "govee"`, `cloud`, `connectivity`.
+  `ghome audit --expect -` joins on it; don't reshape it without the profile.
 - **Room writes send whole collections.** `PUT /group/edit` carries a room's
   complete membership and `groups/manage` the complete remaining room list;
   both are computed from a fresh read *after* the prompt, never from the

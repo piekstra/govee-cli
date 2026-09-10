@@ -2,7 +2,9 @@ use clap::Subcommand;
 use pk_cli_core::CliError;
 use serde_json::{json, Value};
 
-use super::output::{emit_list, emit_one};
+use pk_cli_core::output::emit_one;
+
+use super::output::emit_list_with;
 use super::scene::normalize_for_match;
 use super::Ctx;
 use crate::error::AppError;
@@ -51,10 +53,11 @@ pub async fn handle(ctx: &Ctx, cmd: &MusicCommand) -> Result<(), CliError> {
                 .into());
             }
             let items = extract_music_modes(&dev.info.capabilities);
-            emit_list(
+            emit_list_with(
                 ctx.json,
-                "music-mode-list",
-                json!({ "device": dev.name(), "items": items }),
+                "music-mode",
+                &[("device", json!(dev.name()))],
+                items,
                 &["name"],
             );
         }

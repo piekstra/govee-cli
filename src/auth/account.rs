@@ -1,10 +1,10 @@
-//! The Govee Home app session: one keychain item holding the bearer token
-//! and the identity it was minted for. The `client_id` must stay stable
-//! across login attempts (the emailed verification code is bound to it), so
-//! it is persisted before the first network call.
+//! The Govee Home app session: one keychain item (SPEC §1.7) holding the
+//! bearer token and the identity it was minted for. The `client_id` must
+//! stay stable across login attempts (the emailed verification code is
+//! bound to it), so it is persisted before the first network call.
 
 use pk_cli_core::CliError;
-use pk_cli_secrets::{CredentialStore, Secret};
+use pk_cli_secrets::CredentialStore;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -23,19 +23,14 @@ impl AccountSession {
     }
 }
 
-/// Parse the stored blob; anything unparsable counts as "no session".
-pub fn parse(raw: &Secret) -> Option<AccountSession> {
-    serde_json::from_str(raw.expose()).ok()
-}
-
 /// The stored session, read only when the config names an account (the
-/// gate that keeps a fresh machine prompt-free). `None` when nothing usable
-/// is stored.
+/// gate that keeps a fresh machine prompt-free). `None` when no item
+/// exists; an unreadable item is an error naming it, never "absent".
 pub fn load(cfg: &Config, creds: &CredentialStore) -> Result<Option<AccountSession>, CliError> {
     if cfg.username.is_none() {
         return Ok(None);
     }
-    Ok(creds.get(super::ACCOUNT_ITEM)?.as_ref().and_then(parse))
+    creds.get_json(super::ACCOUNT_ITEM)
 }
 
 /// The session a room command needs, or exit 3 pointing at `auth login-account`.
@@ -49,9 +44,7 @@ pub fn require(cfg: &Config, creds: &CredentialStore) -> Result<AccountSession, 
 }
 
 pub fn store(creds: &CredentialStore, session: &AccountSession) -> Result<(), CliError> {
-    let blob = serde_json::to_string(session)
-        .map_err(|e| CliError::Other(format!("serializing account session: {e}")))?;
-    creds.set(super::ACCOUNT_ITEM, &Secret::new(blob))
+    creds.set_json(super::ACCOUNT_ITEM, session)
 }
 
 /// Remove the session item. Returns whether one existed.

@@ -2,11 +2,11 @@ use clap::Subcommand;
 use pk_cli_core::CliError;
 use serde_json::json;
 
-use super::output::emit_one;
 use super::Ctx;
 use crate::error::AppError;
 use crate::models::device::{validate_brightness, validate_color_temp};
 use crate::resolve;
+use pk_cli_core::output::emit_one;
 
 #[derive(Subcommand, Debug)]
 pub enum LightCommand {
