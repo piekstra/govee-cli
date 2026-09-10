@@ -2,6 +2,12 @@
 
 ## 0.2.0 — 2026-09-10
 
+### Fixed (review of #20)
+
+- `light color --hex` rejects non-ASCII input as a usage error instead of panicking on a byte boundary.
+- The account session's bearer token is redacted in `Debug` output.
+- The CI security job no longer requests the unused `security-events` scope.
+
 **Breaking.** `govee` now conforms to
 [piekstra-cli spec v1](https://github.com/piekstra/cli-common/blob/main/DESIGN.md)
 and is built on the shared `pk-cli-*` crates (cli-common v0.8.0): output
