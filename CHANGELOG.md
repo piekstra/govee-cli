@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 — 2026-09-16
+
+- `toggle set <device> <toggle> on|off` switches any toggle a device exposes
+  (`toggle list` names them): on a Govee floor lamp with several parts that
+  is `ripple`, `side` and `bottom`, matched by any unique part of the
+  instance name. `toggle gradient|dreamview` stay as shorthands.
+- **Breaking:** `segment color|brightness` take `--segments 0-3,7|all` with
+  `--hex`/`--red --green --blue` or `--brightness`, checked against the
+  device's declared segment count and sent in as many calls as its per-call
+  limit needs. The 0.2 raw-JSON positional form lives on as the hidden
+  `--value` for one major version.
+- Device note (H60B0 floor lamp): the eight segments address the side bar;
+  the bottom flood and top ripple lights follow the whole-lamp colour
+  (`light color`), and each part switches with its toggle.
+
 ## 0.2.0 — 2026-09-10
 
 ### Fixed (review of #20)

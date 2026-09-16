@@ -139,6 +139,21 @@ impl Device {
 
     // -- Toggle --
 
+    /// Any `devices.capabilities.toggle` the device exposes, by instance
+    /// (`rippleLightToggle`, `dreamViewToggle`, …).
+    pub async fn set_toggle(&self, instance: &str, on: bool) -> Result<(), AppError> {
+        self.require_capability("devices.capabilities.toggle", instance)?;
+        self.api
+            .control_device(
+                self.sku(),
+                self.device_id(),
+                "devices.capabilities.toggle",
+                instance,
+                json!(if on { 1 } else { 0 }),
+            )
+            .await
+    }
+
     pub async fn set_gradient(&self, on: bool) -> Result<(), AppError> {
         self.require_capability("devices.capabilities.toggle", "gradientToggle")?;
         self.api
