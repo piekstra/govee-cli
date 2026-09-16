@@ -310,6 +310,8 @@ fn device_limits(dev: &Device, kind: SegmentKind) -> Result<Limits, AppError> {
 
 /// A failure part-way through the batches, with what already went through:
 /// the caller can finish with a narrower `--segments` instead of guessing.
+/// The error keeps its class (auth stays exit 3, not-found exit 4); the
+/// note rides in the message where there is one and on stderr otherwise.
 fn partial(e: AppError, done: &[Vec<u8>], failed: &[u8]) -> AppError {
     let applied: Vec<u8> = done.concat();
     let note = if applied.is_empty() {
@@ -325,10 +327,14 @@ fn partial(e: AppError, done: &[Vec<u8>], failed: &[u8]) -> AppError {
             message: format!("{message}; {note}"),
             error_code,
         },
-        other => AppError::Api {
-            message: format!("{other}; {note}"),
-            error_code: None,
-        },
+        AppError::RateLimited(m) => AppError::RateLimited(format!("{m}; {note}")),
+        AppError::UnsupportedOperation(m) => AppError::UnsupportedOperation(format!("{m}; {note}")),
+        AppError::InvalidInput(m) => AppError::InvalidInput(format!("{m}; {note}")),
+        AppError::DeviceNotFound(m) => AppError::DeviceNotFound(format!("{m}; {note}")),
+        other => {
+            eprintln!("note: {note}");
+            other
+        }
     }
 }
 
@@ -632,5 +638,14 @@ mod tests {
         assert!(m.contains("batch [4, 5] failed"), "{m}");
         let first = partial(AppError::InvalidInput("x".into()), &[], &[0]).to_string();
         assert!(first.contains("no segments were changed"), "{first}");
+        // The class survives: an auth failure mid-run still says `auth login` (exit 3).
+        assert!(matches!(
+            partial(AppError::NotAuthenticated, &[vec![0]], &[1]),
+            AppError::NotAuthenticated
+        ));
+        assert!(matches!(
+            partial(AppError::RateLimited("slow down".into()), &[vec![0]], &[1]),
+            AppError::RateLimited(m) if m.contains("slow down") && m.contains("[0] were already set")
+        ));
     }
 }
