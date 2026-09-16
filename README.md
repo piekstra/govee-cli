@@ -1,7 +1,7 @@
 # govee — Govee smart-home devices from the terminal
 
 `govee` controls Govee lights and strips from the command line, for people
-and for agents: power, brightness, colour, scenes, segments and music mode
+and for agents: power, brightness, colour, scenes, segments, toggles and music mode
 over the [Govee Platform API](https://developer.govee.com/), plus the rooms
 the Govee Home app keeps (which the Platform API has no notion of) over the
 app's own private API.
@@ -68,13 +68,16 @@ govee scene list-snapshots "Office Lamp"
 govee scene activate "Office Lamp" Sunset        # case-insensitive, partial match
 govee scene activate-snapshot "Office Lamp" Evening
 
-govee toggle gradient "Office Lamp" on
+govee toggle list "Bedroom Lamp"                  # what this device can switch
+govee toggle set "Bedroom Lamp" side on           # any toggle by (part of) its name
+govee toggle set "Bedroom Lamp" ripple off
+govee toggle gradient "Office Lamp" on            # shorthands
 govee toggle dreamview "Office Lamp" off
-govee toggle list "Office Lamp"
 
-govee segment info "Office Lamp"
-govee segment color "Office Lamp" '{"segment":[0,1,2],"rgb":16711680}'
-govee segment brightness "Office Lamp" '{"segment":[0,1,2],"brightness":80}'
+govee segment info "Office Lamp"                  # how many segments, how many per call
+govee segment color "Office Lamp" --segments 0-3,7 --hex FF1493
+govee segment color "Office Lamp" --segments all --red 255 --green 0 --blue 128
+govee segment brightness "Office Lamp" --segments 4,5 --brightness 80
 
 govee music list "Office Lamp"
 govee music set "Office Lamp" Rhythm --sensitivity 60
