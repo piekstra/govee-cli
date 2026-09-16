@@ -154,32 +154,6 @@ impl Device {
             .await
     }
 
-    pub async fn set_gradient(&self, on: bool) -> Result<(), AppError> {
-        self.require_capability("devices.capabilities.toggle", "gradientToggle")?;
-        self.api
-            .control_device(
-                self.sku(),
-                self.device_id(),
-                "devices.capabilities.toggle",
-                "gradientToggle",
-                json!(if on { 1 } else { 0 }),
-            )
-            .await
-    }
-
-    pub async fn set_dreamview(&self, on: bool) -> Result<(), AppError> {
-        self.require_capability("devices.capabilities.toggle", "dreamViewToggle")?;
-        self.api
-            .control_device(
-                self.sku(),
-                self.device_id(),
-                "devices.capabilities.toggle",
-                "dreamViewToggle",
-                json!(if on { 1 } else { 0 }),
-            )
-            .await
-    }
-
     // -- Segment --
 
     pub async fn set_segment_color(&self, segments: serde_json::Value) -> Result<(), AppError> {

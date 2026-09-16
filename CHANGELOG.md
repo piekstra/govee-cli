@@ -9,8 +9,13 @@
 - **Breaking:** `segment color|brightness` take `--segments 0-3,7|all` with
   `--hex`/`--red --green --blue` or `--brightness`, checked against the
   device's declared segment count and sent in as many calls as its per-call
-  limit needs. The 0.2 raw-JSON positional form lives on as the hidden
-  `--value` for one major version.
+  limit needs, and a failure part-way names the segments already set. The
+  0.2 raw-JSON positional form lives on as the hidden `--value` for one
+  major version. `segment-control/v1` keeps its keys (`segment_color` /
+  `segment_brightness: "set"`) and gains `instance`, `segments`, `calls`
+  and `hex` / `brightness` on both paths (additive, so still v1).
+- `Device::set_gradient` / `set_dreamview` are gone from the library
+  surface; `set_toggle(instance, on)` is the one path.
 - Device note (H60B0 floor lamp): the eight segments address the side bar;
   the bottom flood and top ripple lights follow the whole-lamp colour
   (`light color`), and each part switches with its toggle.

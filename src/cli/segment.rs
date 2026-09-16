@@ -2,6 +2,10 @@
 //! Segments are given as a list (`0,1,2`), ranges (`0-3,7`) or `all`; the
 //! device's capability says how many there are and how many one call may
 //! address, and longer lists are sent in as many calls as needed.
+//!
+//! `plan` turns the arguments into the one checked `Plan` that both the
+//! pre-keychain gate and the handler use, so what was validated is what is
+//! sent.
 
 use clap::Subcommand;
 use pk_cli_core::CliError;
@@ -15,6 +19,8 @@ use crate::resolve;
 use pk_cli_core::output::emit_one;
 
 const SEGMENTS: &str = "devices.capabilities.segment_color_setting";
+const COLOR: &str = "segmentedColorRgb";
+const BRIGHTNESS: &str = "segmentedBrightness";
 
 #[derive(Subcommand, Debug)]
 pub enum SegmentCommand {
@@ -69,6 +75,55 @@ pub enum SegmentCommand {
 pub enum Segments {
     All,
     List(Vec<u8>),
+}
+
+/// What a write sets on its segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setting {
+    Rgb(u32),
+    Brightness(u8),
+}
+
+impl Setting {
+    fn instance(self) -> &'static str {
+        match self {
+            Setting::Rgb(_) => COLOR,
+            Setting::Brightness(_) => BRIGHTNESS,
+        }
+    }
+
+    fn value_for(self, batch: &[u8]) -> Value {
+        match self {
+            Setting::Rgb(rgb) => json!({ "segment": batch, "rgb": rgb }),
+            Setting::Brightness(b) => json!({ "segment": batch, "brightness": b }),
+        }
+    }
+
+    /// The report keys this setting adds to `segment-control/v1`.
+    fn report(self, row: &mut serde_json::Map<String, Value>) {
+        match self {
+            Setting::Rgb(rgb) => {
+                row.insert("hex".into(), json!(format!("#{rgb:06X}")));
+                row.insert("segment_color".into(), json!("set"));
+            }
+            Setting::Brightness(b) => {
+                row.insert("brightness".into(), json!(b));
+                row.insert("segment_brightness".into(), json!("set"));
+            }
+        }
+    }
+}
+
+/// The one checked description of a write, shared by the gate and the handler.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Plan {
+    /// `--segments` and a setting: batched against the device's limits.
+    Batched { spec: Segments, setting: Setting },
+    /// The deprecated `--value`: the Platform API's value sent as given.
+    Raw {
+        instance: &'static str,
+        value: Value,
+    },
 }
 
 /// `0,1,2`, `0-3,7`, `all` (case-insensitive; spaces allowed). Duplicates
@@ -182,42 +237,49 @@ fn parse_value(value: &str) -> Result<Value, AppError> {
     })
 }
 
-/// Argument checks that need no credential (exit 2 before the keychain).
-pub fn validate(cmd: &SegmentCommand) -> Result<(), CliError> {
-    match cmd {
+/// The checked plan for a write; `None` for `info`.
+pub fn plan(cmd: &SegmentCommand) -> Result<Option<Plan>, AppError> {
+    Ok(match cmd {
+        SegmentCommand::Color { value: Some(v), .. } => Some(Plan::Raw {
+            instance: COLOR,
+            value: parse_value(v)?,
+        }),
         SegmentCommand::Color {
             segments,
             hex,
             red,
             green,
             blue,
-            value,
             ..
-        } => {
-            if let Some(v) = value {
-                parse_value(v)?;
-            } else {
-                parse_segments(segments.as_deref().unwrap_or_default())?;
-                rgb_from_args(hex.as_deref(), *red, *green, *blue)?;
-            }
-        }
+        } => Some(Plan::Batched {
+            spec: parse_segments(segments.as_deref().unwrap_or_default())?,
+            setting: Setting::Rgb(rgb_from_args(hex.as_deref(), *red, *green, *blue)?),
+        }),
+        SegmentCommand::Brightness { value: Some(v), .. } => Some(Plan::Raw {
+            instance: BRIGHTNESS,
+            value: parse_value(v)?,
+        }),
         SegmentCommand::Brightness {
             segments,
             brightness,
-            value,
             ..
         } => {
-            if let Some(v) = value {
-                parse_value(v)?;
-            } else {
-                parse_segments(segments.as_deref().unwrap_or_default())?;
-                if brightness.is_some_and(|b| b > 100) {
-                    return Err(AppError::InvalidInput("brightness is 0-100".into()).into());
-                }
+            let level = brightness.unwrap_or(100);
+            if level > 100 {
+                return Err(AppError::InvalidInput("brightness is 0-100".into()));
             }
+            Some(Plan::Batched {
+                spec: parse_segments(segments.as_deref().unwrap_or_default())?,
+                setting: Setting::Brightness(level),
+            })
         }
-        SegmentCommand::Info { .. } => {}
-    }
+        SegmentCommand::Info { .. } => None,
+    })
+}
+
+/// Argument checks that need no credential (exit 2 before the keychain).
+pub fn validate(cmd: &SegmentCommand) -> Result<(), CliError> {
+    plan(cmd)?;
     Ok(())
 }
 
@@ -235,83 +297,113 @@ fn device_limits(dev: &Device, instance: &str) -> Result<Limits, AppError> {
         })
 }
 
+/// A failure part-way through the batches, with what already went through:
+/// the caller can finish with a narrower `--segments` instead of guessing.
+fn partial(e: AppError, done: &[Vec<u8>], failed: &[u8]) -> AppError {
+    let applied: Vec<u8> = done.concat();
+    let note = if applied.is_empty() {
+        format!("no segments were changed (batch {failed:?} failed)")
+    } else {
+        format!("segments {applied:?} were already set; batch {failed:?} failed")
+    };
+    match e {
+        AppError::Api {
+            message,
+            error_code,
+        } => AppError::Api {
+            message: format!("{message}; {note}"),
+            error_code,
+        },
+        other => AppError::Api {
+            message: format!("{other}; {note}"),
+            error_code: None,
+        },
+    }
+}
+
+async fn send(dev: &Device, instance: &str, value: Value) -> Result<(), AppError> {
+    if instance == COLOR {
+        dev.set_segment_color(value).await
+    } else {
+        dev.set_segment_brightness(value).await
+    }
+}
+
+/// The `segment-control/v1` row: the device, what was set, on which segments,
+/// in how many calls. The raw path fills the same keys from its own value.
+fn report(
+    dev: &Device,
+    instance: &str,
+    segments: Vec<Value>,
+    calls: usize,
+    setting: Option<Setting>,
+    raw: Option<&Value>,
+) -> Value {
+    let mut row = serde_json::Map::new();
+    row.insert("device".into(), json!(dev.name()));
+    row.insert("instance".into(), json!(instance));
+    row.insert("segments".into(), Value::Array(segments));
+    row.insert("calls".into(), json!(calls));
+    match (setting, raw) {
+        (Some(s), _) => s.report(&mut row),
+        (None, Some(v)) => {
+            if let Some(rgb) = v.get("rgb").and_then(Value::as_u64) {
+                row.insert("hex".into(), json!(format!("#{rgb:06X}")));
+            }
+            if let Some(b) = v.get("brightness") {
+                row.insert("brightness".into(), b.clone());
+            }
+            let key = if instance == COLOR {
+                "segment_color"
+            } else {
+                "segment_brightness"
+            };
+            row.insert(key.into(), json!("set"));
+        }
+        (None, None) => {}
+    }
+    Value::Object(row)
+}
+
 pub async fn handle(ctx: &Ctx, cmd: &SegmentCommand) -> Result<(), CliError> {
-    validate(cmd)?;
+    let plan = plan(cmd)?;
     let api = ctx.api()?;
-    match cmd {
-        SegmentCommand::Color {
-            device,
-            segments,
-            hex,
-            red,
-            green,
-            blue,
-            value,
-        } => {
-            let dev = resolve::resolve_device(&api, device).await?;
-            if let Some(v) = value {
-                dev.set_segment_color(parse_value(v)?).await?;
-                emit_one(
-                    ctx.json,
-                    "segment-control",
-                    json!({ "device": dev.name(), "segment_color": "set" }),
-                );
-                return Ok(());
-            }
-            let spec = parse_segments(segments.as_deref().unwrap_or_default())?;
-            let rgb = rgb_from_args(hex.as_deref(), *red, *green, *blue)?;
-            let batches = batches(&spec, device_limits(&dev, "segmentedColorRgb")?)?;
-            for batch in &batches {
-                dev.set_segment_color(json!({ "segment": batch, "rgb": rgb }))
-                    .await?;
-            }
+    let device = match cmd {
+        SegmentCommand::Color { device, .. }
+        | SegmentCommand::Brightness { device, .. }
+        | SegmentCommand::Info { device } => device,
+    };
+    let dev = resolve::resolve_device(&api, device).await?;
+    match plan {
+        Some(Plan::Raw { instance, value }) => {
+            send(&dev, instance, value.clone()).await?;
+            let segments = value
+                .get("segment")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             emit_one(
                 ctx.json,
                 "segment-control",
-                json!({
-                    "device": dev.name(),
-                    "segments": batches.concat(),
-                    "hex": format!("#{rgb:06X}"),
-                    "calls": batches.len(),
-                }),
+                report(&dev, instance, segments, 1, None, Some(&value)),
             );
         }
-        SegmentCommand::Brightness {
-            device,
-            segments,
-            brightness,
-            value,
-        } => {
-            let dev = resolve::resolve_device(&api, device).await?;
-            if let Some(v) = value {
-                dev.set_segment_brightness(parse_value(v)?).await?;
-                emit_one(
-                    ctx.json,
-                    "segment-control",
-                    json!({ "device": dev.name(), "segment_brightness": "set" }),
-                );
-                return Ok(());
+        Some(Plan::Batched { spec, setting }) => {
+            let instance = setting.instance();
+            let batches = batches(&spec, device_limits(&dev, instance)?)?;
+            for (i, batch) in batches.iter().enumerate() {
+                send(&dev, instance, setting.value_for(batch))
+                    .await
+                    .map_err(|e| partial(e, &batches[..i], batch))?;
             }
-            let spec = parse_segments(segments.as_deref().unwrap_or_default())?;
-            let level = brightness.unwrap_or(100);
-            let batches = batches(&spec, device_limits(&dev, "segmentedBrightness")?)?;
-            for batch in &batches {
-                dev.set_segment_brightness(json!({ "segment": batch, "brightness": level }))
-                    .await?;
-            }
+            let segments = batches.concat().into_iter().map(|s| json!(s)).collect();
             emit_one(
                 ctx.json,
                 "segment-control",
-                json!({
-                    "device": dev.name(),
-                    "segments": batches.concat(),
-                    "brightness": level,
-                    "calls": batches.len(),
-                }),
+                report(&dev, instance, segments, batches.len(), Some(setting), None),
             );
         }
-        SegmentCommand::Info { device } => {
-            let dev = resolve::resolve_device(&api, device).await?;
+        None => {
             let segment_caps: Vec<Value> = dev
                 .info
                 .capabilities
@@ -421,5 +513,71 @@ mod tests {
         );
         assert!(rgb_from_args(None, Some(1), None, None).is_err());
         assert!(rgb_from_args(None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn the_plan_is_what_gets_sent() {
+        let color = SegmentCommand::Color {
+            device: "Lamp".into(),
+            segments: Some("0-1".into()),
+            hex: Some("FF1493".into()),
+            red: None,
+            green: None,
+            blue: None,
+            value: None,
+        };
+        let p = plan(&color).unwrap().unwrap();
+        assert_eq!(
+            p,
+            Plan::Batched {
+                spec: Segments::List(vec![0, 1]),
+                setting: Setting::Rgb(0xFF1493)
+            }
+        );
+        assert_eq!(
+            Setting::Rgb(0xFF1493).value_for(&[0, 1]),
+            json!({"segment": [0, 1], "rgb": 0xFF1493})
+        );
+        assert_eq!(
+            Setting::Brightness(40).value_for(&[7]),
+            json!({"segment": [7], "brightness": 40})
+        );
+        let raw = SegmentCommand::Brightness {
+            device: "Lamp".into(),
+            segments: None,
+            brightness: None,
+            value: Some(r#"{"segment":[2],"brightness":30}"#.into()),
+        };
+        assert!(matches!(
+            plan(&raw).unwrap().unwrap(),
+            Plan::Raw {
+                instance: BRIGHTNESS,
+                ..
+            }
+        ));
+        let bad = SegmentCommand::Brightness {
+            device: "Lamp".into(),
+            segments: Some("0".into()),
+            brightness: Some(101),
+            value: None,
+        };
+        assert!(plan(&bad).is_err());
+        assert!(plan(&SegmentCommand::Info { device: "x".into() })
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_failure_mid_batch_says_what_was_already_set() {
+        let e = partial(
+            AppError::InvalidInput("Govee said no".into()),
+            &[vec![0, 1], vec![2, 3]],
+            &[4, 5],
+        );
+        let m = e.to_string();
+        assert!(m.contains("segments [0, 1, 2, 3] were already set"), "{m}");
+        assert!(m.contains("batch [4, 5] failed"), "{m}");
+        let first = partial(AppError::InvalidInput("x".into()), &[], &[0]).to_string();
+        assert!(first.contains("no segments were changed"), "{first}");
     }
 }

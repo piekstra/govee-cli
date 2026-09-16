@@ -43,13 +43,22 @@ Capability values the commands send (`src/models/device.rs`):
 - `range/brightness`: `1..=100`
 - `color_setting/colorRgb`: one packed integer `r*65536 + g*256 + b`
 - `color_setting/colorTemperatureK`: `2000..=9000`
-- `toggle/gradientToggle`, `toggle/dreamViewToggle`: `1` / `0`
+- `toggle/<any instance the device declares>` (`gradientToggle`,
+  `dreamViewToggle`, and on the H60B0 floor lamp `rippleLightToggle`,
+  `sideLightToggle`, `bottomLightToggle`): `1` / `0`. `toggle list` names
+  them; `toggle set` takes the instance or a unique part of it
 - `dynamic_scene/lightScene`, `dynamic_scene/snapshot`: `{paramId, id}` taken
   verbatim from the scene list's `value`
 - `segment_color_setting/segmentedColorRgb`: `{"segment": [i, …], "rgb": <packed>}`;
-  `segmentedBrightness`: `{"segment": [i, …], "brightness": 1..=100}` — the
-  user passes this JSON as-is; `segment info` shows the device's field
-  definitions
+  `segmentedBrightness`: `{"segment": [i, …], "brightness": 1..=100}`. The
+  CLI builds these from `--segments` (a list, ranges or `all`) and the
+  colour/brightness flags, checks the indices against the capability's
+  `fields[segment].elementRange.max`, and sends one call per
+  `fields[segment].size.max` segments; a failure part-way names the
+  segments already set. The raw JSON is still accepted as the hidden,
+  deprecated `--value`. Device note: on the H60B0 floor lamp the eight
+  segments are the side bar; the bottom flood and top ripple lights follow
+  `color_setting/colorRgb`
 - `music_setting/musicMode`: `{"musicMode": <id>, "sensitivity": 0..=100, "autoColor": 1}`;
   the mode ids come from `parameters.fields[fieldName == "musicMode"].options`,
   not from top-level `options` like the other enums
