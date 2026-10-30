@@ -18,7 +18,7 @@ any time. Use it on your own account, at your own risk.
 ## Install
 
 ```console
-cargo install --git https://github.com/piekstra/govee-cli
+cargo install --git https://github.com/piekstra/govee-cli --locked
 # or a release binary: https://github.com/piekstra/govee-cli/releases
 govee self-update            # later: replace the binary with the latest release
 ```
