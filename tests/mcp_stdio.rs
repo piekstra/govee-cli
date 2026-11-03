@@ -2,7 +2,8 @@
 //! launch it, against a stub of Govee's Platform API on 127.0.0.1 that answers from the
 //! scrubbed fixtures and remembers what it was told. The key comes from `$GOVEE_API_KEY`, so
 //! nothing here touches a keychain, and the live path runs for real: config, key, client, the
-//! server's blocking pool. No request leaves this machine and no device exists.
+//! server's blocking pool. No request leaves this machine and no device exists: a debug binary
+//! takes `GOVEE_TEST_BASE_URL`, and a release binary does not.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -29,16 +30,13 @@ const HEATER: &str = "Bedroom Heater";
 fn govee(test: &str, base_url: Option<&str>) -> Command {
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("mcp-stdio-{test}"));
     std::fs::create_dir_all(&root).unwrap();
-    let config = root.join("config.json");
-    match base_url {
-        Some(url) => std::fs::write(&config, json!({ "base_url": url }).to_string()).unwrap(),
-        None => {
-            let _ = std::fs::remove_file(&config);
-        }
-    }
     let mut c = Command::new(env!("CARGO_BIN_EXE_govee"));
+    match base_url {
+        Some(url) => c.env("GOVEE_TEST_BASE_URL", url),
+        None => c.env_remove("GOVEE_TEST_BASE_URL"),
+    };
     c.env_remove("GOVEE_API_KEY")
-        .env("GOVEE_CONFIG", &config)
+        .env("GOVEE_CONFIG", root.join("config.json"))
         .env("XDG_CONFIG_HOME", &root)
         .env("HOME", &root)
         .env("USERPROFILE", &root);
@@ -66,6 +64,8 @@ struct Stub {
     state: Option<Value>,
     /// Answer every request with this envelope instead.
     refuse_with: Option<Value>,
+    /// Apply a command, and answer it with something that is not JSON.
+    garble_control: bool,
 }
 
 type Shared = Arc<Mutex<Stub>>;
@@ -104,8 +104,13 @@ fn stub_api(refuse_with: Option<Value>) -> (String, Shared) {
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
             let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-            let answer = answer(&stub, &method, &path, &body, has_key);
-            let answer = answer.to_string();
+            let answer = answer(&stub, &method, &path, &body, has_key).to_string();
+            let garbled = stub.lock().unwrap().garble_control && path == "/device/control";
+            let answer = if garbled {
+                "<html>bad gateway</html>".to_string()
+            } else {
+                answer
+            };
             let _ = write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
@@ -379,6 +384,30 @@ fn a_refused_write_sends_no_command() {
     }
     let seen = stub.lock().unwrap().seen.clone();
     assert!(seen.iter().all(|r| r.path != "/device/control"), "{seen:?}");
+}
+
+/// The command took effect and the answer was lost: a real client's decode error, through to
+/// a result that reports the state and does not ask for the command again.
+#[test]
+fn a_garbled_answer_to_a_command_is_settled_by_the_state() {
+    let (url, stub) = stub_api(None);
+    stub.lock().unwrap().garble_control = true;
+    let mut command = govee("garbled", Some(&url));
+    command.env("GOVEE_API_KEY", KEY);
+    let mut server = Server::start(command);
+
+    let call = server.call(1, "govee_power", json!({"device": LAMP, "power": "off"}));
+    let got = structured(&call);
+    assert_eq!(got["confirmed"], true, "{got}");
+    assert_eq!(got["device"]["power"], "off");
+
+    // A scene cannot be read back, so this one stays unknown, and says so with no URL.
+    let call = server.call(2, "govee_light", json!({"device": LAMP, "scene": "Forest"}));
+    let got = structured(&call);
+    assert_eq!(got["confirmed"], false, "{got}");
+    let note = got["note"].as_str().unwrap();
+    assert!(note.contains("may or may not have taken effect"), "{note}");
+    assert!(!note.contains("127.0.0.1"), "{note}");
 }
 
 /// `auth login` would write the keychain, which the variable wins over.

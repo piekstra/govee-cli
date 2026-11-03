@@ -115,11 +115,7 @@ impl Ctx {
     /// A Platform API client, or exit 3 before any network call.
     pub fn api(&self) -> Result<GoveeApi, CliError> {
         let (key, _) = api_key::resolve(&self.cfg, &self.creds)?;
-        Ok(GoveeApi::new(
-            key.expose().to_string(),
-            self.verbose,
-            self.cfg.base_url(),
-        )?)
+        Ok(GoveeApi::new(key.expose().to_string(), self.verbose)?)
     }
 
     /// The app account session if one is configured and stored; `None`

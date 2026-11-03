@@ -148,15 +148,16 @@ The two that change a device are not read-only and carry
 takes one device by its full name or its id. Part of a name is refused however unique, so "all"
 cannot reach the hallway light, and there is no list of devices, wildcard or group. Each changes a
 device whose Govee type is a light or a socket; a heater, kettle or humidifier has the same power
-switch and is refused. Each returns the state read back from Govee, about one and three seconds
-later, with `confirmed`: `true` only when that state shows the change. Govee does not report the
-running scene or fresh values for an offline device, so those stay `false`, and a `note` says why.
-That is not a failure, and Claude is told not to send the command again.
+switch and is refused, as is a group. Each returns the state read back from Govee, about one and
+three seconds later, with `confirmed`: `true` only when that state shows the change. Govee does not
+report the running scene or fresh values for an offline device, so those stay `false`, and a `note`
+says why. That is not a failure, and Claude is told not to send the command again. If the command's
+own answer is lost, the state read back settles it the same way, and the `note` says the outcome is
+unknown until it does.
 
 No tool can remove a device, rearrange or rename rooms, change your account, a schedule or a
 device's firmware, or share access, and none reaches `govee api`. Toggles, segments and music modes
-are left to the CLI. Govee's group devices are not offered either, since the Platform API lists them
-with no capabilities to control.
+are left to the CLI.
 
 Results are concise by default (`response_format: "detailed"` adds a device's id and SKU, and every
 other value Govee reports), 25 records a page with a cursor for more. A field Govee left out is
@@ -254,10 +255,9 @@ run).
 ## Configuration
 
 `govee config path|show|set|unset` manages `~/.config/govee/config.json`
-(`--config <PATH>` or `$GOVEE_CONFIG` overrides). The settable keys are
-`username`, the Govee account email `auth login-account` defaults to, and
-`base_url`, where the Platform API is, which sends your API key there and is for
-a stub in tests. The file also records whether a key is stored in the keychain, so a machine with
+(`--config <PATH>` or `$GOVEE_CONFIG` overrides). The one settable key is
+`username`, the Govee account email `auth login-account` defaults to. The
+file also records whether a key is stored in the keychain, so a machine with
 nothing configured fails fast (exit 3) without a keychain prompt.
 
 ## Rate limits

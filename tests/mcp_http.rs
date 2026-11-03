@@ -136,11 +136,15 @@ impl Server {
         let mut raw = String::new();
         stream.read_to_string(&mut raw).unwrap();
         let (head, body) = raw.split_once("\r\n\r\n").expect("a response head");
-        let status = head.split(' ').nth(1).unwrap().parse().unwrap();
-        (
-            status,
-            serde_json::from_str(body.trim()).unwrap_or(Value::Null),
-        )
+        let status: u16 = head.split(' ').nth(1).unwrap().parse().unwrap();
+        // A refusal has no JSON to read. A 200 must, or the failure is here, with the body.
+        let parsed = serde_json::from_str(body.trim());
+        let parsed = if status == 200 {
+            parsed.unwrap_or_else(|e| panic!("a 200 that is not JSON ({e}): {raw}"))
+        } else {
+            parsed.unwrap_or(Value::Null)
+        };
+        (status, parsed)
     }
 }
 
@@ -207,11 +211,11 @@ fn the_worker_gets_the_reads_with_the_token_only() {
 }
 
 /// Reaching a real light from a Worker is opt-in: without the flag a write is neither listed
-/// nor callable, whatever the caller knows about its name.
+/// nor callable, whatever the caller knows about its name. With the flag the same call reaches
+/// the tool, which asks for a key, so the refusal here is the flag's and nothing else's.
 #[test]
 fn a_write_is_not_callable_without_the_flag() {
-    let s = Server::start(&[]);
-    for (name, args) in [
+    let writes = [
         (
             "govee_power",
             json!({"device": "Office Floor Lamp", "power": "off"}),
@@ -220,10 +224,19 @@ fn a_write_is_not_callable_without_the_flag() {
             "govee_light",
             json!({"device": "Office Floor Lamp", "brightness": 10}),
         ),
-    ] {
-        let got = call(&s, name, args);
-        let refused = got.get("error").is_some() || got["result"]["isError"] == true;
-        assert!(refused, "{got}");
+    ];
+    let s = Server::start(&[]);
+    for (name, args) in &writes {
+        let got = call(&s, name, args.clone());
+        assert!(got.get("result").is_none(), "{got}");
+        let refusal = got["error"]["message"].as_str().unwrap();
+        assert!(refusal.contains(name), "{refusal}");
+    }
+    let s = Server::start(&["--allow-writes"]);
+    for (name, args) in &writes {
+        let got = call(&s, name, args.clone());
+        let text = got["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("auth:"), "{text}");
     }
 }
 

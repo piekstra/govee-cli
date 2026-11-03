@@ -98,8 +98,9 @@ Run `make verify` before considering a change done — it's exactly what CI runs
 `src/mcp.rs` is `govee mcp` (cli-common `DESIGN.md` §1.9). Three tools read; `govee_power` and
 `govee_light` change one device, follow my-q-cli's pattern, and are not read-only. A write names
 one device by its full name or id (`named_device` leaves the resolver's partial match out), is
-refused unless the device's Platform type is in `CONTROLLABLE_TYPES`, can send only a `Change`,
-and returns the state read back with `confirmed`. A new argument or tool goes on the lists in
+refused unless the device's Platform type is in `CONTROLLABLE_TYPES` and its SKU is no group, can
+send only a `Change`, and returns the state read back with `confirmed`, also when the command's own
+answer was lost (`Sent::NoAnswer`). A new argument or tool goes on the lists in
 `src/mcp/tests.rs`, a new request on the list in `tests/mcp_stdio.rs`, and a new tool in
 `packaging/mcpb/manifest.json` and README's table. The definitions stay under 8,000 characters
 together. No tool removes or unpairs a device, changes an account, a schedule, a room or firmware,
@@ -120,7 +121,8 @@ command would prompt once per keychain item on every run. The surface tests
 use a nonexistent `GOVEE_CONFIG` (no marker, no username) and unset
 `GOVEE_API_KEY`, so every credentialed command stops at exit 3 before the
 keychain. `tests/mcp_stdio.rs` runs the real server against a stub of the Platform API on
-127.0.0.1, with the key in the environment; no test can reach a real device. Two tests reach the network on purpose (`self-update --check`, and
+127.0.0.1, with the key in the environment and the stub named in `GOVEE_TEST_BASE_URL`, which only
+a debug build reads; no test can reach a real device. Two tests reach the network on purpose (`self-update --check`, and
 `devices list` with a bogus env key) and accept "no network" as a pass.
 Live checks go through the installed binary by hand.
 

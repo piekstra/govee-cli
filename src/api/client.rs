@@ -11,6 +11,18 @@ use crate::error::AppError;
 
 pub const BASE_URL: &str = "https://openapi.api.govee.com/router/api/v1";
 
+/// Where the key is sent. A debug build, which is what `cargo test` runs, takes
+/// `GOVEE_TEST_BASE_URL` so `tests/mcp_stdio.rs` can answer from a stub. A release build
+/// compiles the variable out, so nothing a config or an environment says can send the key
+/// anywhere else.
+fn base_url() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(stub) = std::env::var("GOVEE_TEST_BASE_URL") {
+        return stub;
+    }
+    BASE_URL.to_string()
+}
+
 #[derive(Clone)]
 pub struct GoveeApi {
     client: reqwest::Client,
@@ -58,8 +70,8 @@ impl ApiResponse {
 
 impl GoveeApi {
     /// `api_key` is the raw key; it is only ever placed in the request
-    /// header and never logged. `base` is [`crate::config::Config::base_url`].
-    pub fn new(api_key: String, verbose: bool, base: &str) -> Result<Self, AppError> {
+    /// header and never logged.
+    pub fn new(api_key: String, verbose: bool) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
             .user_agent(format!("{}/{}", crate::BIN, env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(15))
@@ -68,7 +80,7 @@ impl GoveeApi {
             client,
             api_key,
             verbose,
-            base: base.to_string(),
+            base: base_url(),
         })
     }
 

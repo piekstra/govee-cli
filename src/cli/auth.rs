@@ -101,7 +101,7 @@ fn migrate_legacy(ctx: &Ctx) -> Result<legacy::Moved, CliError> {
 }
 
 async fn verify_key(ctx: &Ctx, key: &Secret) -> Result<usize, CliError> {
-    let api = GoveeApi::new(key.expose().to_string(), ctx.verbose, ctx.cfg.base_url())?;
+    let api = GoveeApi::new(key.expose().to_string(), ctx.verbose)?;
     let data = api.get_devices().await?;
     let n = data.as_array().map(|a| a.len()).unwrap_or(0);
     ctx.note(&format!("ok: {n} device(s) visible to this key"));
@@ -203,13 +203,24 @@ fn logout(ctx: &Ctx, args: &LogoutArgs) -> Result<(), CliError> {
         if ctx.cfg.api_key_in_keychain {
             ctx.creds.delete(API_KEY_ITEM)?;
         }
-        ctx.creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT)?;
+        // Nothing records whether `mcp --new-token` ran, so this read is ungated: a keyring that
+        // is not running, or a prompt declined, must not leave the config behind it.
+        let token = ctx.creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT);
         ctx.store.clear()?;
+        token.map_err(connector_token_stays)?;
         ctx.note("API key and connector token removed from the keychain; config cleared");
     } else {
         ctx.note("API key and connector token kept; pass --forget to remove them");
     }
     Ok(())
+}
+
+/// What a failed token delete still leaves true. Nothing, if `mcp --new-token` never ran here.
+fn connector_token_stays(failure: CliError) -> CliError {
+    CliError::Keychain(format!(
+        "the API key and config are cleared, but the connector token of `govee mcp --http` could \
+         not be removed, if there is one: {failure}"
+    ))
 }
 
 fn set_credential(ctx: &Ctx, args: &SetCredentialArgs) -> Result<(), CliError> {

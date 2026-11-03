@@ -20,6 +20,7 @@ const BULB: &str = "Hallway Bulb";
 const PLUG: &str = "Desk Plug";
 const HEATER: &str = "Bedroom Heater";
 const SENSOR: &str = "Porch Thermometer";
+const GROUP: &str = "Downstairs Lights";
 
 #[derive(Default)]
 struct Fake {
@@ -29,6 +30,7 @@ struct Fake {
     scenes: RefCell<Value>,
     app: RefCell<Option<Result<Vec<AppDevice>, String>>>,
     control_fails: Cell<bool>,
+    control_answer_lost: Cell<bool>,
     open_fails: RefCell<Option<CliError>>,
     key_from_env: Cell<bool>,
     opened: Cell<usize>,
@@ -99,14 +101,17 @@ impl Platform for Rc<Fake> {
         Ok(self.scenes.borrow().clone())
     }
 
-    async fn control(&self, device: &DeviceInfo, change: &Change) -> Result<(), CliError> {
+    async fn control(&self, device: &DeviceInfo, change: &Change) -> Result<Sent, CliError> {
         if self.control_fails.get() {
             return Err(CliError::Upstream("Govee refused it".into()));
         }
         self.sent
             .borrow_mut()
             .push((device.name().to_string(), change.clone()));
-        Ok(())
+        if self.control_answer_lost.get() {
+            return Ok(Sent::NoAnswer("the request timed out".into()));
+        }
+        Ok(Sent::Accepted)
     }
 }
 
@@ -336,7 +341,7 @@ fn the_instructions_say_what_the_writes_are_for() {
 fn devices_are_concise_by_default_and_say_what_can_be_changed() {
     let (tools, _) = home();
     let got = ok(&tools, DEVICES_TOOL, json!({}));
-    assert_eq!(names(&got), [LAMP, BULB, PLUG, HEATER, SENSOR]);
+    assert_eq!(names(&got), [LAMP, BULB, PLUG, HEATER, SENSOR, GROUP]);
     let items = got["items"].as_array().unwrap();
     assert_eq!(items[0]["kind"], "light");
     assert_eq!(
@@ -350,6 +355,9 @@ fn devices_are_concise_by_default_and_say_what_can_be_changed() {
     assert_eq!(items[3]["kind"], "heater");
     assert_eq!(items[3]["controls"], json!([]));
     assert_eq!(items[4]["controls"], json!([]));
+    // A group is typed and capable like a light, and is not one device.
+    assert_eq!(items[5]["kind"], "light");
+    assert_eq!(items[5]["controls"], json!([]));
     assert!(items[0].get("device_id").is_none(), "{got}");
     assert!(items[0].get("sku").is_none(), "{got}");
     assert!(items[0].get("room").is_none(), "{got}");
@@ -395,7 +403,7 @@ fn a_failing_account_session_leaves_the_devices_and_a_note() {
     let (tools, fake) = home();
     *fake.app.borrow_mut() = Some(Err("no valid Govee account session".into()));
     let got = ok(&tools, DEVICES_TOOL, json!({}));
-    assert_eq!(names(&got).len(), 5);
+    assert_eq!(names(&got).len(), 6);
     assert!(got["note"].as_str().unwrap().contains("Rooms"), "{got}");
 
     let text = failed(&tools, DEVICES_TOOL, json!({"room": "office"}));
@@ -625,11 +633,25 @@ fn power_changes_a_light_or_a_plug_and_refuses_anything_else() {
     let (tools, fake) = home();
     let text = failed(&tools, POWER_TOOL, json!({"device": HEATER, "power": "on"}));
     assert!(text.starts_with("usage:"), "{text}");
-    assert!(text.contains("not a light or a plug"), "{text}");
+    assert!(text.contains("not one light or plug"), "{text}");
     assert_eq!(fake.sent(), []);
 
     let text = failed(&tools, POWER_TOOL, json!({"device": SENSOR, "power": "on"}));
-    assert!(text.contains("not a light or a plug"), "{text}");
+    assert!(text.contains("not one light or plug"), "{text}");
+    assert_eq!(fake.sent(), []);
+}
+
+/// One approved call must not change every light in a group, whatever Govee types it as.
+#[test]
+fn a_group_is_refused_though_it_looks_like_a_light() {
+    let (tools, fake) = home();
+    for (name, args) in [
+        (POWER_TOOL, json!({"device": GROUP, "power": "off"})),
+        (LIGHT_TOOL, json!({"device": GROUP, "brightness": 10})),
+    ] {
+        let text = failed(&tools, name, args);
+        assert!(text.contains("not one light or plug"), "{text}");
+    }
     assert_eq!(fake.sent(), []);
 }
 
@@ -872,6 +894,54 @@ fn a_first_read_that_fails_gets_a_second_try() {
     let got = ok(&tools, POWER_TOOL, json!({"device": LAMP, "power": "off"}));
     assert_eq!(got["confirmed"], true);
     assert!(got.get("note").is_none(), "{got}");
+}
+
+/// The answer was lost, not the command. Reading the state is how to find out, and a plain
+/// error would read as "try again".
+#[test]
+fn a_lost_answer_reads_the_state_and_says_the_outcome_is_unknown() {
+    let (tools, fake) = home();
+    fake.control_answer_lost.set(true);
+    let got = ok(
+        &tools,
+        LIGHT_TOOL,
+        json!({"device": LAMP, "brightness": 40}),
+    );
+    assert_eq!(got["confirmed"], false);
+    assert_eq!(fake.state_reads.get(), 2);
+    let note = got["note"].as_str().unwrap();
+    assert!(note.contains("may or may not have taken effect"), "{note}");
+    assert!(note.contains("the request timed out"), "{note}");
+    assert!(note.contains("do not send it again"), "{note}");
+
+    let (tools, fake) = home();
+    fake.control_answer_lost.set(true);
+    fake.answer_states(vec![Ok(state_with("brightness", json!(40)))]);
+    let got = ok(
+        &tools,
+        LIGHT_TOOL,
+        json!({"device": LAMP, "brightness": 40}),
+    );
+    assert_eq!(got["confirmed"], true, "the state settles it: {got}");
+    assert!(got.get("note").is_none(), "{got}");
+}
+
+/// A real producer: a connection that never opened sent nothing, so it stays an error.
+#[test]
+fn a_connection_that_never_opened_is_a_plain_failure() {
+    let refused = call_runtime()
+        .unwrap()
+        .block_on(reqwest::Client::new().post("http://127.0.0.1:9/").send())
+        .unwrap_err();
+    let got = what_became_of(Err(AppError::Http(refused)));
+    assert!(matches!(got, Err(CliError::Upstream(_))), "{got:?}");
+
+    let got = what_became_of(Err(AppError::Api {
+        message: "refused".into(),
+        error_code: Some(400),
+    }));
+    assert!(matches!(got, Err(CliError::Upstream(_))), "{got:?}");
+    assert_eq!(what_became_of(Ok(())).unwrap(), Sent::Accepted);
 }
 
 // ---- errors ----------------------------------------------------------------------------

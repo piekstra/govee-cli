@@ -59,7 +59,7 @@ const PROPERTY: &str = "devices.capabilities.property";
 
 /// The Platform device types a tool may change: a light or a plug. Govee also sells
 /// heaters, kettles and humidifiers with the same power switch, which are not for a tool
-/// to turn on.
+/// to turn on. A group is refused by SKU in [`may_change`], whatever it is typed as.
 const CONTROLLABLE_TYPES: [&str; 2] = ["devices.types.light", "devices.types.socket"];
 
 /// What a tool can change, the name `controls` gives it, and the capability that does it.
@@ -173,13 +173,22 @@ fn on_off(on: bool) -> &'static str {
 
 // ---- the provider ---------------------------------------------------------------
 
+/// What became of a command Govee did not refuse.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Sent {
+    Accepted,
+    /// It left this computer and no usable answer came back (a timeout, a reset, a body that
+    /// is not JSON), so it may have taken effect. The reason, with no URL.
+    NoAnswer(String),
+}
+
 /// What a tool can do at Govee once it holds a key.
 #[allow(async_fn_in_trait)] // no Send bound: the executor polls on the calling thread
 pub trait Platform {
     async fn devices(&self) -> Result<Vec<DeviceInfo>, CliError>;
     async fn state(&self, device: &DeviceInfo) -> Result<Value, CliError>;
     async fn scenes(&self, device: &DeviceInfo) -> Result<Value, CliError>;
-    async fn control(&self, device: &DeviceInfo, change: &Change) -> Result<(), CliError>;
+    async fn control(&self, device: &DeviceInfo, change: &Change) -> Result<Sent, CliError>;
 }
 
 /// What a call opens, so the tests run offline.
@@ -237,7 +246,7 @@ impl Platform for LivePlatform {
             .block_on(self.api.get_device_scenes(device.model(), device.id()))?)
     }
 
-    async fn control(&self, device: &DeviceInfo, change: &Change) -> Result<(), CliError> {
+    async fn control(&self, device: &DeviceInfo, change: &Change) -> Result<Sent, CliError> {
         let dev = Device::new(
             self.api.clone(),
             device.clone(),
@@ -259,7 +268,20 @@ impl Platform for LivePlatform {
                 },
             }
         });
-        Ok(sent?)
+        what_became_of(sent)
+    }
+}
+
+/// A connection that never opened sent nothing, so it is a failure like any other. Any other
+/// transport failure may have come after Govee took the command, and an error there reads as
+/// "try again" to a model, over whatever the user has changed since.
+fn what_became_of(sent: Result<(), AppError>) -> Result<Sent, CliError> {
+    match sent {
+        Ok(()) => Ok(Sent::Accepted),
+        Err(AppError::Http(e)) if !e.is_connect() => {
+            Ok(Sent::NoAnswer(e.without_url().to_string()))
+        }
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -296,11 +318,7 @@ impl Source for LiveSource {
     fn open(&self) -> Result<LivePlatform, CliError> {
         let cfg: Config = self.store.load()?;
         let (key, _) = api_key::resolve(&cfg, &self.creds)?;
-        LivePlatform::new(GoveeApi::new(
-            key.expose().to_string(),
-            false,
-            cfg.base_url(),
-        )?)
+        LivePlatform::new(GoveeApi::new(key.expose().to_string(), false)?)
     }
 
     async fn app_devices(&self) -> Result<Option<Vec<AppDevice>>, CliError> {
@@ -358,7 +376,7 @@ struct DevicesFilter<'a> {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StateArgs {
-    /// The device: its name, a unique part of it, or its id.
+    /// Its name, a unique part of it, or its id.
     pub device: String,
     /// `concise` (default), or `detailed`: adds device_id, sku and every other value.
     #[serde(default)]
@@ -367,7 +385,7 @@ pub struct StateArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ScenesArgs {
-    /// The device: its name, a unique part of it, or its id.
+    /// Its name, a unique part of it, or its id.
     pub device: String,
     /// Only scenes whose name contains this text.
     #[serde(default)]
@@ -392,16 +410,19 @@ pub enum OnOff {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PowerArgs {
-    /// The one device to change: its full name or its id. Part of a name is refused.
+    /// The one device: its full name or id, never part of a name.
     pub device: String,
     /// `on` or `off`.
     pub power: OnOff,
 }
 
+/// `device` and one setting. The schema says so for a client that reads it, and
+/// [`wanted_light`] for one that does not.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("minProperties" = 2, "maxProperties" = 2))]
 pub struct LightArgs {
-    /// The one light to change: its full name or its id. Part of a name is refused.
+    /// The one light: its full name or id, never part of a name.
     pub device: String,
     /// Brightness, 1 to 100.
     #[serde(default)]
@@ -590,7 +611,7 @@ impl<S: Source> Toolset for GoveeTools<S> {
             .output::<Controlled>(),
             ToolDef::write(
                 LIGHT_TOOL,
-                "Set a Govee light's brightness, color or scene",
+                "Set one Govee light",
                 "Sets one light's brightness, color, color temperature or scene, only when the user \
                  asked for this now: pass exactly one. It takes one device by its full name or \
                  id. Returns device (the state read back), requested, confirmed (true when the \
@@ -789,13 +810,19 @@ impl<S: Source> GoveeTools<S> {
         if !device.has_capability(cap_type, instance) {
             return Err(tool_err(cannot(device)));
         }
-        api.control(device, &change).await.map_err(tool_err)?;
-        ToolOutput::new(&self.read_back(&api, device, change).await)
+        let sent = api.control(device, &change).await.map_err(tool_err)?;
+        ToolOutput::new(&self.read_back(&api, device, change, sent).await)
     }
 
     /// The state after a command. The command has gone: a failure here says so and is not a
     /// tool error, which a model would answer by sending the command again.
-    async fn read_back(&self, api: &S::Api, device: &DeviceInfo, change: Change) -> Controlled {
+    async fn read_back(
+        &self,
+        api: &S::Api,
+        device: &DeviceInfo,
+        change: Change,
+        sent: Sent,
+    ) -> Controlled {
         let waits: &[Duration] = if change.can_be_read_back() {
             &READ_BACK_WAITS
         } else {
@@ -828,7 +855,7 @@ impl<S: Source> GoveeTools<S> {
         let note = if confirmed {
             None
         } else {
-            Some(unconfirmed_note(&change, &state, failure.as_ref()))
+            Some(unconfirmed_note(&change, &sent, &state, failure.as_ref()))
         };
         Controlled {
             device: state,
@@ -839,23 +866,35 @@ impl<S: Source> GoveeTools<S> {
     }
 }
 
-fn unconfirmed_note(change: &Change, state: &DeviceState, failure: Option<&CliError>) -> String {
+fn unconfirmed_note(
+    change: &Change,
+    sent: &Sent,
+    state: &DeviceState,
+    failure: Option<&CliError>,
+) -> String {
     let check = format!("Call {STATE_TOOL} to check; do not send it again unless that shows it");
+    let took = match sent {
+        Sent::Accepted => "Govee accepted the command".to_string(),
+        Sent::NoAnswer(why) => format!(
+            "No usable answer came back to the command ({why}), so it may or may not have \
+             taken effect"
+        ),
+    };
     if let Some(e) = failure {
-        return format!("Govee accepted the command, but reading the state failed: {e}. {check}.");
+        return format!("{took}, and reading the state failed: {e}. {check}.");
     }
     if state.online == Some(false) {
         return format!(
-            "Govee accepted the command, but reports the device offline, so this state is the \
-             last it heard. {check}."
+            "{took}, and Govee reports the device offline, so this state is the last it heard. \
+             {check}."
         );
     }
     if !change.can_be_read_back() {
-        return "Govee accepted the scene. Its state does not say which scene is running, so \
-                the user is the only check."
-            .into();
+        return format!(
+            "{took}. The state does not say which scene is running, so the user is the only check."
+        );
     }
-    format!("Govee accepted the command, but still reports the previous value. {check}.")
+    format!("{took}, and Govee still reports the previous value. {check}.")
 }
 
 fn rooms_failed(e: CliError) -> ToolError {
@@ -914,17 +953,22 @@ fn check_may_change(device: &DeviceInfo) -> Result<(), CliError> {
         Ok(())
     } else {
         Err(CliError::Usage(format!(
-            "`{}` is not a light or a plug, and these tools change only those",
+            "`{}` is not one light or plug, and these tools change only those",
             device.name()
         )))
     }
 }
 
 fn may_change(device: &DeviceInfo) -> bool {
-    device
-        .device_type
-        .as_deref()
-        .is_some_and(|t| CONTROLLABLE_TYPES.contains(&t))
+    let is_group = matches!(
+        DeviceType::from_sku(device.model()),
+        DeviceType::BaseGroup | DeviceType::SameModeGroup
+    );
+    !is_group
+        && device
+            .device_type
+            .as_deref()
+            .is_some_and(|t| CONTROLLABLE_TYPES.contains(&t))
 }
 
 fn controls_of(device: &DeviceInfo) -> Vec<String> {

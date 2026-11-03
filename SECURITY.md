@@ -19,8 +19,7 @@ API key, the connector token (`mcp-http-token`, below) and the config file. Revo
 environment of any process that sets it accordingly.
 
 The config file (`~/.config/govee/config.json`) records the account email and
-whether a key is stored; it never contains a secret. Its `base_url`, when set,
-is where the API key is sent, so a file only you can write matters.
+whether a key is stored; it never contains a secret.
 
 ## The MCP server
 
@@ -31,7 +30,7 @@ is signed in, what each device reports, and with `response_format: "detailed"` i
 for Govee contains the device's MAC address.
 
 Three tools read. `govee_power` and `govee_light` change one device each, whose full name or id
-the call must carry and whose Govee type must be a light or a socket. They are not read-only and
+the call must carry, whose Govee type must be a light or a socket, and which must not be a group. They are not read-only and
 carry `anthropic/requiresUserInteraction`, so a client that honors them asks before every call. They
 can send only a power, brightness, color, color-temperature or scene command, and return the state
 read back. A tool cannot reach `govee api`, room writes, toggles, segments, music modes or any

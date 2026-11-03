@@ -16,8 +16,8 @@
   published only once every asset is there.
 - `self-update` says to restart a running `govee mcp --http` and to install the new `.mcpb`.
 - `auth logout --forget` also removes the connector token, and plain `auth logout` says it keeps it.
+  A token it cannot remove still lets it clear the config, and it then says so and exits nonzero.
 - A failure that got no answer from Govee no longer prints its URL.
-- `config set base_url` points the Platform API client elsewhere, for a stub in tests.
 - cli-common v0.22.0, up from v0.15.1. The minimum Rust version is 1.89.
 
 ## 0.3.1 — 2026-11-03

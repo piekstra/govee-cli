@@ -13,9 +13,10 @@ shape rather than against string literals in test code.
   `sku`/`device`/`deviceName`/`groupId` and the `deviceExt.deviceSettings`
   JSON string that decides Wi-Fi vs Bluetooth-only. **Synthetic**, same date.
 
-- `platform-devices-other.json` — the same list's shape for a plug, a heater and
-  a thermometer, the kinds `govee_power` allows and refuses. **Synthetic**,
-  2026-11-03, from the same documentation.
+- `platform-devices-other.json` — the same list's shape for a plug, a heater, a
+  thermometer and a group, the kinds `govee_power` allows and refuses. The group
+  row has control capabilities on purpose, which docs/api.md says Govee's do not
+  list today. **Synthetic**, 2026-11-03, from the same documentation.
 - `platform-state.json`, `platform-state-sensor.json` — the `payload` of
   `POST /device/state`, for a light and for an offline sensor. **Synthetic**,
   2026-11-03, from the same documentation.
