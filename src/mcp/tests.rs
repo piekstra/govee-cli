@@ -40,6 +40,9 @@ struct Fake {
     paused: RefCell<Vec<Duration>>,
     open_takes: Cell<Duration>,
     send_deadline: Cell<Option<Duration>>,
+    /// How far the wall clock moves during `open`, as a Mac asleep through a prompt.
+    slept_in_open: Cell<Duration>,
+    wall_moved: Cell<Duration>,
 }
 
 type Tools = GoveeTools<Rc<Fake>>;
@@ -123,6 +126,7 @@ impl Source for Rc<Fake> {
     fn open(&self) -> Result<Rc<Fake>, CliError> {
         self.opened.set(self.opened.get() + 1);
         std::thread::sleep(self.open_takes.get());
+        self.wall_moved.set(self.slept_in_open.get());
         if let Some(e) = self.open_fails.borrow_mut().take() {
             return Err(e);
         }
@@ -147,6 +151,10 @@ impl Source for Rc<Fake> {
 
     fn send_deadline(&self) -> Duration {
         self.send_deadline.get().unwrap_or(SEND_DEADLINE)
+    }
+
+    fn wall_clock(&self) -> SystemTime {
+        SystemTime::now() + self.wall_moved.get()
     }
 }
 
@@ -594,6 +602,27 @@ fn a_call_that_reaches_the_command_past_the_deadline_sends_nothing() {
     assert!(text.contains("nothing was sent"), "{text}");
     assert!(fake.sent.borrow().is_empty());
     assert_eq!(fake.state_reads.get(), 0);
+}
+
+/// `Instant` stands still while a Mac sleeps, so only the wall clock sees this night pass.
+#[test]
+fn a_mac_that_slept_through_the_prompt_sends_nothing() {
+    let (tools, fake) = home();
+    fake.slept_in_open.set(Duration::from_secs(8 * 60 * 60));
+    let text = failed(&tools, POWER_TOOL, json!({"device": LAMP, "power": "off"}));
+    assert!(text.contains("nothing was sent"), "{text}");
+    assert!(fake.sent.borrow().is_empty());
+}
+
+#[test]
+fn a_wall_clock_that_moved_back_leaves_the_monotonic_one() {
+    let started = CallStart {
+        monotonic: Instant::now(),
+        wall: SystemTime::now(),
+    };
+    let hour = Duration::from_secs(60 * 60);
+    assert!(started.elapsed(started.wall - hour) < hour);
+    assert!(started.elapsed(started.wall + hour) >= hour);
 }
 
 /// The command and its read-backs, at the client's 15 s each, inside `--http`'s 120 s.
