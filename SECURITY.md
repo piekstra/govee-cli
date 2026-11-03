@@ -46,7 +46,9 @@ applies on the next call. A tool never prompts for a key or creates a keychain i
 rejected key in the keychain is an error asking the user to run `govee auth login` in a terminal,
 and one from `$GOVEE_API_KEY`, which wins over the keychain, asks them to correct it where it is
 set, such as the Claude Desktop extension's settings. On macOS a binary macOS has not granted raises
-a keychain prompt on a call, and a server left unattended waits on it. The Claude Desktop extension
+a keychain prompt on a call, and a server left unattended waits on it. A write that reaches its
+command 60 s or more after the call began sends nothing and says so, so a prompt answered late cannot
+switch a device. The Claude Desktop extension
 does not read the keychain for the key, since it is given one, though it does read the account
 session where `auth login-account` has signed in.
 

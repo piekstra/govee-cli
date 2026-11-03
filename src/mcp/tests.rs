@@ -38,6 +38,8 @@ struct Fake {
     scene_reads: Cell<usize>,
     sent: RefCell<Vec<(String, Change)>>,
     paused: RefCell<Vec<Duration>>,
+    open_takes: Cell<Duration>,
+    send_deadline: Cell<Option<Duration>>,
 }
 
 type Tools = GoveeTools<Rc<Fake>>;
@@ -120,6 +122,7 @@ impl Source for Rc<Fake> {
 
     fn open(&self) -> Result<Rc<Fake>, CliError> {
         self.opened.set(self.opened.get() + 1);
+        std::thread::sleep(self.open_takes.get());
         if let Some(e) = self.open_fails.borrow_mut().take() {
             return Err(e);
         }
@@ -140,6 +143,10 @@ impl Source for Rc<Fake> {
 
     fn pause(&self, how_long: Duration) {
         self.paused.borrow_mut().push(how_long);
+    }
+
+    fn send_deadline(&self) -> Duration {
+        self.send_deadline.get().unwrap_or(SEND_DEADLINE)
     }
 }
 
@@ -573,6 +580,32 @@ fn power_sends_one_command_to_the_device_named_and_returns_its_state() {
     assert_eq!(got["device"]["name"], LAMP);
     assert_eq!(got["device"]["power"], "off");
     assert!(got.get("note").is_none(), "{got}");
+}
+
+/// A keychain prompt answered after `--http` gave up on the call must not switch a device, because
+/// nobody is left to be told.
+#[test]
+fn a_call_that_reaches_the_command_past_the_deadline_sends_nothing() {
+    let (tools, fake) = home();
+    fake.open_takes.set(Duration::from_millis(20));
+    fake.send_deadline.set(Some(Duration::from_millis(10)));
+    let text = failed(&tools, POWER_TOOL, json!({"device": LAMP, "power": "off"}));
+    assert!(text.starts_with("upstream:"), "{text}");
+    assert!(text.contains("nothing was sent"), "{text}");
+    assert!(fake.sent.borrow().is_empty());
+    assert_eq!(fake.state_reads.get(), 0);
+}
+
+/// The command and its read-backs, at the client's 15 s each, inside `--http`'s 120 s.
+#[test]
+fn a_write_can_answer_inside_the_http_limit() {
+    let per_request = 15;
+    let waits: u64 = READ_BACK_WAITS.iter().map(Duration::as_secs).sum();
+    assert!(SEND_DEADLINE.as_secs() + per_request * 3 + waits < 120);
+    assert!(
+        per_request * 2 < SEND_DEADLINE.as_secs(),
+        "a list and scenes fit before it"
+    );
 }
 
 #[test]

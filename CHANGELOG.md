@@ -8,7 +8,9 @@
   and says whether it shows the change. They run over stdio for Claude Code and Claude Desktop, and
   with `--http` on 127.0.0.1 behind a bearer token for Claude on the web and mobile through your own
   Cloudflare Worker and tunnel, reads only unless `--allow-writes`. No tool can remove a device,
-  rearrange rooms, change an account, a schedule or firmware, or reach `govee api`.
+  rearrange rooms, change an account, a schedule or firmware, or reach `govee api`. A write that
+  reaches its command 60 s or more after the call began sends nothing and says so, so a keychain
+  prompt answered late cannot switch a device.
 - `$GOVEE_API_KEY`, which already came before the keychain, is how the Claude Desktop extension
   passes its key.
 - Releases are cut by pushing a tag, no longer by merging a version bump. They attach
@@ -18,7 +20,7 @@
 - `auth logout --forget` also removes the connector token, and plain `auth logout` says it keeps it.
   A token it cannot remove still lets it clear the config, and it then says so and exits nonzero.
 - A failure that got no answer from Govee no longer prints its URL.
-- cli-common v0.22.0, up from v0.15.1. The minimum Rust version is 1.89.
+- cli-common v0.23.0, up from v0.15.1. The minimum Rust version is 1.89.
 
 ## 0.3.1 — 2026-11-03
 

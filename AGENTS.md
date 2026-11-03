@@ -11,7 +11,7 @@ API** (rooms and the account login: `app2.govee.com`). A thin, Govee-specific
 layer over the shared [`cli-common`](https://github.com/piekstra/cli-common)
 `pk-cli-*` crates (auth shapes, config, secrets, self-update, output, exit
 codes, the confirmation gate, reference resolution, mcp), pinned to tag
-**v0.22.0**. This repo owns only the
+**v0.23.0**. This repo owns only the
 two clients, the device models, and the commands.
 
 ## Build, test, lint

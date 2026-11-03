@@ -16,7 +16,7 @@
 //! passes it) and then the keychain, and is not held between calls, so a new one applies on
 //! the next. An API key does not rotate, so nothing here renews anything or takes a lock.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pk_cli_config::ConfigStore;
 use pk_cli_core::resolve::pick;
@@ -75,6 +75,12 @@ const CONTROLS: [(&str, &str, &str); 6] = [
 /// How long before each read-back. A control call's 200 says Govee took the command, so a read
 /// straight after it can show the old value.
 const READ_BACK_WAITS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(2)];
+
+/// No command is sent this long after the call began. What comes before it can wait on a keychain
+/// prompt for as long as nobody answers, and `--http` has by then told the caller it gave up after
+/// 120 s, so a late command would switch a device nobody is expecting to change. A command sent
+/// just inside this, and its two read-backs at 15 s each, still answer in time.
+const SEND_DEADLINE: Duration = Duration::from_secs(60);
 
 /// A scene option: which capability it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -202,6 +208,10 @@ pub trait Source {
     /// Whether a call's key comes from `$GOVEE_API_KEY` and not the keychain.
     fn key_is_passed_in(&self) -> bool;
     fn pause(&self, how_long: Duration);
+    /// How long after a call began its command may still go.
+    fn send_deadline(&self) -> Duration {
+        SEND_DEADLINE
+    }
 }
 
 /// A call's own runtime and client. `reqwest`'s async client needs a Tokio context, which the
@@ -787,6 +797,7 @@ impl<S: Source> GoveeTools<S> {
     /// Resolve one device by its full name or id, check it may and can take the change, send
     /// it, and read the result back.
     async fn change(&self, query: &str, wanted: Wanted) -> Result<ToolOutput, ToolError> {
+        let started = Instant::now();
         let api = self.source.open().map_err(tool_err)?;
         let devices = api.devices().await.map_err(tool_err)?;
         let device = named_device(&devices, query).map_err(tool_err)?;
@@ -809,6 +820,14 @@ impl<S: Source> GoveeTools<S> {
         let (cap_type, instance) = change.capability();
         if !device.has_capability(cap_type, instance) {
             return Err(tool_err(cannot(device)));
+        }
+        if started.elapsed() >= self.source.send_deadline() {
+            return Err(tool_err(CliError::Upstream(format!(
+                "nothing was sent: this call waited over {} s to reach the command, on a keychain \
+                 prompt or a slow list, and its caller may have stopped waiting. Call it again if \
+                 the change is still wanted.",
+                self.source.send_deadline().as_secs()
+            ))));
         }
         let sent = api.control(device, &change).await.map_err(tool_err)?;
         ToolOutput::new(&self.read_back(&api, device, change, sent).await)
