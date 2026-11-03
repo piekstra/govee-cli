@@ -2,7 +2,7 @@
 name = "govee-cli"
 version = "0.3.1"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Govee smart-home devices from the terminal: lights, scenes and segments over the Platform API, rooms over the Govee Home app's private API. Keychain-secured, agent-friendly."
 license = "GPL-3.0"
 repository = "https://github.com/piekstra/govee-cli"
