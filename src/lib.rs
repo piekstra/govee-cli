@@ -117,9 +117,9 @@ async fn dispatch(ctx: &Ctx, command: &Commands) -> Result<(), CliError> {
         Commands::Music(cmd) => cli::music::handle(ctx, cmd).await,
         Commands::Rooms(cmd) => cli::rooms::handle(ctx, cmd).await,
         Commands::Api(args) => {
-            // Method and body are validated before any credential is read.
-            let (method, body) = cli::api::validate(args)?;
-            cli::api::run(ctx, args, method, body).await
+            // Method, body and URL are validated before any credential is read.
+            let request = cli::api::validate(args)?;
+            cli::api::run(ctx, request).await
         }
         Commands::Config(_)
         | Commands::SelfUpdate(_)

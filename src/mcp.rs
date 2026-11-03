@@ -16,14 +16,14 @@
 //! passes it) and then the keychain, and is not held between calls, so a new one applies on
 //! the next. An API key does not rotate, so nothing here renews anything or takes a lock.
 
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use pk_cli_config::ConfigStore;
 use pk_cli_core::resolve::pick;
 use pk_cli_core::CliError;
 use pk_cli_mcp::{
-    parse_args, ListArgs, Page, PageRequest, ResponseFormat, Server, ToolDef, ToolError,
-    ToolOutput, Toolset,
+    parse_args, Clock, ListArgs, Page, PageRequest, ResponseFormat, SendDeadline, Server,
+    SystemClock, ToolDef, ToolError, ToolOutput, Toolset,
 };
 use pk_cli_secrets::CredentialStore;
 use schemars::JsonSchema;
@@ -81,22 +81,6 @@ const READ_BACK_WAITS: [Duration; 2] = [Duration::from_secs(1), Duration::from_s
 /// 120 s, so a late command would switch a device nobody is expecting to change. A command sent
 /// just inside this, and its two read-backs at 15 s each, still answer in time.
 const SEND_DEADLINE: Duration = Duration::from_secs(60);
-
-/// When a call began, on both clocks. `Instant` stops while a Mac sleeps, so a keychain prompt
-/// answered the next morning would read as seconds later on it. The wall clock runs on, and one
-/// that moved backwards says nothing, which leaves the `Instant`.
-#[derive(Debug, Clone, Copy)]
-struct CallStart {
-    monotonic: Instant,
-    wall: SystemTime,
-}
-
-impl CallStart {
-    fn elapsed(&self, wall_now: SystemTime) -> Duration {
-        let wall = wall_now.duration_since(self.wall).unwrap_or_default();
-        self.monotonic.elapsed().max(wall)
-    }
-}
 
 /// A scene option: which capability it belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,13 +208,9 @@ pub trait Source {
     /// Whether a call's key comes from `$GOVEE_API_KEY` and not the keychain.
     fn key_is_passed_in(&self) -> bool;
     fn pause(&self, how_long: Duration);
-    /// How long after a call began its command may still go.
-    fn send_deadline(&self) -> Duration {
-        SEND_DEADLINE
-    }
-    /// The time of day, for [`CallStart`].
-    fn wall_clock(&self) -> SystemTime {
-        SystemTime::now()
+    /// The clock a write's [`SEND_DEADLINE`] reads.
+    fn clock(&self) -> &dyn Clock {
+        &SystemClock
     }
 }
 
@@ -817,10 +797,7 @@ impl<S: Source> GoveeTools<S> {
     /// Resolve one device by its full name or id, check it may and can take the change, send
     /// it, and read the result back.
     async fn change(&self, query: &str, wanted: Wanted) -> Result<ToolOutput, ToolError> {
-        let started = CallStart {
-            monotonic: Instant::now(),
-            wall: self.source.wall_clock(),
-        };
+        let deadline = SendDeadline::start(self.source.clock(), SEND_DEADLINE);
         let api = self.source.open().map_err(tool_err)?;
         let devices = api.devices().await.map_err(tool_err)?;
         let device = named_device(&devices, query).map_err(tool_err)?;
@@ -844,14 +821,7 @@ impl<S: Source> GoveeTools<S> {
         if !device.has_capability(cap_type, instance) {
             return Err(tool_err(cannot(device)));
         }
-        if started.elapsed(self.source.wall_clock()) >= self.source.send_deadline() {
-            return Err(tool_err(CliError::Upstream(format!(
-                "nothing was sent: this call waited over {} s to reach the command, on a keychain \
-                 prompt or a slow list, and its caller may have stopped waiting. Call it again if \
-                 the change is still wanted.",
-                self.source.send_deadline().as_secs()
-            ))));
-        }
+        deadline.check().map_err(tool_err)?;
         let sent = api.control(device, &change).await.map_err(tool_err)?;
         ToolOutput::new(&self.read_back(&api, device, change, sent).await)
     }

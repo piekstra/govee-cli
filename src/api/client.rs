@@ -2,6 +2,7 @@
 //! `Govee-API-Key` header; every response is an envelope
 //! `{code, message|msg, data|payload}` where `code` is the real status.
 
+use pk_cli_core::transport::same_host_redirects;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -75,6 +76,8 @@ impl GoveeApi {
         let client = reqwest::Client::builder()
             .user_agent(format!("{}/{}", crate::BIN, env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(15))
+            // `Govee-API-Key` is not a header reqwest strips, so it would follow any redirect.
+            .redirect(same_host_redirects())
             .build()?;
         Ok(Self {
             client,
@@ -242,4 +245,19 @@ impl GoveeApi {
 
 fn snippet(text: &str) -> String {
     text.chars().take(200).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::redirect_stub::{redirect_to_another_host, runtime};
+
+    #[test]
+    fn the_key_does_not_follow_a_redirect_to_another_host() {
+        let (first, elsewhere) = redirect_to_another_host();
+        let api = GoveeApi::new("dummy-key".into(), false).unwrap();
+        let got = runtime().block_on(api.raw(reqwest::Method::GET, &first, None));
+        assert!(got.is_err());
+        assert!(elsewhere.lock().unwrap().is_empty());
+    }
 }
