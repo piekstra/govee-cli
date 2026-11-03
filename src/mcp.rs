@@ -282,13 +282,14 @@ impl Platform for LivePlatform {
     }
 }
 
-/// A connection that never opened sent nothing, so it is a failure like any other. Any other
-/// transport failure may have come after Govee took the command, and an error there reads as
-/// "try again" to a model, over whatever the user has changed since.
+/// A connection that never opened sent nothing, so it is a failure like any other, as is a redirect
+/// this refused, which Govee answered with in place of a change. Any other transport failure may
+/// have come after Govee took the command, and an error there reads as "try again" to a model, over
+/// whatever the user has changed since.
 fn what_became_of(sent: Result<(), AppError>) -> Result<Sent, CliError> {
     match sent {
         Ok(()) => Ok(Sent::Accepted),
-        Err(AppError::Http(e)) if !e.is_connect() => {
+        Err(AppError::Http(e)) if !e.is_connect() && !e.is_redirect() => {
             Ok(Sent::NoAnswer(e.without_url().to_string()))
         }
         Err(e) => Err(e.into()),

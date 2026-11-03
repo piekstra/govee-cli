@@ -38,6 +38,18 @@ pub(crate) mod redirect_stub {
         (first, seen)
     }
 
+    /// What the refused redirect comes back as.
+    pub fn refused_redirect() -> reqwest::Error {
+        let (first, _) = redirect_to_another_host();
+        let client = reqwest::Client::builder()
+            .redirect(pk_cli_core::transport::same_host_redirects())
+            .build()
+            .unwrap();
+        runtime()
+            .block_on(async { client.get(&first).send().await })
+            .unwrap_err()
+    }
+
     pub fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()

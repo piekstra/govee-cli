@@ -4,7 +4,8 @@
 
 - **Security fix:** the API key and the account login no longer follow a redirect off their host.
   reqwest keeps `Govee-API-Key` on every hop, and a 307 or 308 re-sends a body, which at login holds
-  the password and the code. A redirect to another host is now an error.
+  the password and the code. A redirect to another host is now an error that says so, and a write
+  refused this way is reported as a failure, not as an unknown outcome.
 - **Security fix:** `govee api` refuses a plain `http` URL off this machine with exit 2, before it
   reads the key. The key goes with the request, so a full `http://` URL sent it in the clear.
 - A write's deadline is now cli-common's `SendDeadline`, with the same 60 s and both clocks. Its

@@ -251,13 +251,15 @@ fn snippet(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::api::redirect_stub::{redirect_to_another_host, runtime};
+    use pk_cli_core::CliError;
 
     #[test]
     fn the_key_does_not_follow_a_redirect_to_another_host() {
         let (first, elsewhere) = redirect_to_another_host();
         let api = GoveeApi::new("dummy-key".into(), false).unwrap();
         let got = runtime().block_on(api.raw(reqwest::Method::GET, &first, None));
-        assert!(got.is_err());
+        let text = CliError::from(got.unwrap_err()).to_string();
+        assert!(text.contains("another host"), "{text}");
         assert!(elsewhere.lock().unwrap().is_empty());
     }
 }

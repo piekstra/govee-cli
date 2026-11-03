@@ -997,6 +997,12 @@ fn a_connection_that_never_opened_is_a_plain_failure() {
     }));
     assert!(matches!(got, Err(CliError::Upstream(_))), "{got:?}");
     assert_eq!(what_became_of(Ok(())).unwrap(), Sent::Accepted);
+    // Govee answered with the redirect and took no command, so this is not "may have worked".
+    let refused = crate::api::redirect_stub::refused_redirect();
+    let text = what_became_of(Err(AppError::Http(refused)))
+        .unwrap_err()
+        .to_string();
+    assert!(text.contains("another host"), "{text}");
 }
 
 // ---- errors ----------------------------------------------------------------------------
