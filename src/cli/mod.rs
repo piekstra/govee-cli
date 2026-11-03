@@ -83,6 +83,13 @@ pub enum Commands {
     Rooms(rooms::RoomsCommand),
     /// Raw Platform API passthrough: `api GET /user/devices`.
     Api(api::ApiCommand),
+    /// Serve Govee tools to Claude over MCP: three reads, and two that change a light or a
+    /// plug, which the client asks you about first (stdio, or --http).
+    ///
+    /// For Claude Code (`claude mcp add govee -- govee mcp`), Claude Desktop and any MCP
+    /// client. With --http, on 127.0.0.1 behind a bearer token, for your own Cloudflare
+    /// Worker (see README), and read-only unless --allow-writes.
+    Mcp(pk_cli_mcp::McpArgs),
     /// Update to the latest release from GitHub.
     SelfUpdate(SelfUpdateArgs),
     /// Print a shell completion script.

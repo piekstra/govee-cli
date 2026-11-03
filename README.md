@@ -129,6 +129,112 @@ govee api POST /device/state --data '{"requestId":"1","payload":{"sku":"H60B0","
 Paths are relative to `https://openapi.api.govee.com/router/api/v1`; the
 response envelope is printed as-is (`api-response/v1`).
 
+## Use with Claude
+
+`govee mcp` serves five tools over MCP, so Claude can see your Govee devices and, when you ask,
+change one light or plug. There is no hosted service: the tools run on your computer, in your
+copy of `govee`, and call Govee's API with your key.
+
+| Tool | Does | Changes a device |
+| --- | --- | --- |
+| `govee_devices` | What do I have? Name, kind, room, and what the tools can change on it, narrowed by `name` or `room` | no |
+| `govee_device_state` | Is it on? Online, power, brightness, color, color temperature, sensor readings | no |
+| `govee_scenes` | What can this light show? Its scenes and saved snapshots, narrowed by `name` | no |
+| `govee_power` | Turn one light or plug on or off | **yes** |
+| `govee_light` | Set one light's brightness, color, color temperature or scene | **yes** |
+
+The two that change a device are not read-only and carry
+`anthropic/requiresUserInteraction`, so a client that honors them asks you before every call. Each
+takes one device by its full name or its id. Part of a name is refused however unique, so "all"
+cannot reach the hallway light, and there is no list of devices, wildcard or group. Each changes a
+device whose Govee type is a light or a socket; a heater, kettle or humidifier has the same power
+switch and is refused, as is a group. Each returns the state read back from Govee, about one and
+three seconds later, with `confirmed`: `true` only when that state shows the change. Govee does not
+report the running scene or fresh values for an offline device, so those stay `false`, and a `note`
+says why. That is not a failure, and Claude is told not to send the command again. If the command's
+own answer is lost, the state read back settles it the same way, and the `note` says the outcome is
+unknown until it does.
+
+No tool can remove a device, rearrange or rename rooms, change your account, a schedule or a
+device's firmware, or share access, and none reaches `govee api`. Toggles, segments and music modes
+are left to the CLI.
+
+Results are concise by default (`response_format: "detailed"` adds a device's id and SKU, and every
+other value Govee reports), 25 records a page with a cursor for more. A field Govee left out is
+absent and never a default, and an answer of the wrong shape is an error. Each page reads Govee
+again, so a device added between pages can repeat or be skipped: for a count, read one call with
+`limit` up to 200. Device, room and scene names are yours or Govee's; the server tells Claude to
+treat them as data, not instructions.
+
+The tools are worded for a model, so they differ from `--json`, which passes Govee's names through:
+`name` for `deviceName`, `device_id` for `device`, `power: "on"` for `powerSwitch: 1`, `color:
+"#RRGGBB"` for the packed integer, and `kind: "light"` for `devices.types.light`. A device's id is
+left out unless you ask for detailed. `govee_light` refuses a scene name that matches two scenes,
+where `govee scene activate` takes the first.
+
+Rooms and Bluetooth-only devices come from the Govee Home account, when `govee auth login-account`
+has signed it in; that is Govee's private app API, and a stale session leaves the devices in place
+with a `note`. Each call that needs the list reads Govee at least once, and a change reads it three
+to four times, against the 10,000 a day of your key.
+
+**Give it a key first.** Run `govee auth login` in a terminal (see [Setup](#setup)). Claude Code and
+`--http` use that key from the OS keychain (service `piekstra.govee`). When the key is missing or
+rejected the tools say so and ask you to run it. They never ask for it themselves.
+
+**Claude Code.** Add the `govee-cli` plugin from the
+[piekstra plugin marketplace](https://github.com/piekstra/claude-plugins):
+
+```console
+$ claude plugin marketplace add piekstra/claude-plugins
+$ claude plugin install govee-cli@piekstra-plugins
+```
+
+or register the server yourself:
+
+```console
+$ claude mcp add govee -- govee mcp
+```
+
+**Claude Desktop.** Download `govee-<version>.mcpb` from the
+[latest release](https://github.com/piekstra/govee-cli/releases/latest) and open it. It asks for your
+API key, keeps it in Claude Desktop's settings and passes it to the bundled `govee` as
+`$GOVEE_API_KEY`. A key that is wrong or revoked is changed in the extension's settings, and the
+tools say so. A non-empty `$GOVEE_API_KEY` wins wherever the server starts, so `govee auth login`
+does not replace it. On a computer where `govee auth login-account` has signed in, the extension's
+copy reads that session from the keychain for rooms, and macOS asks once whether to allow it.
+
+Any other MCP client that launches a local server can run `govee mcp`.
+
+**Claude on the web and mobile.** claude.ai reaches tools through a remote connector, so `govee`
+serves the tools from your computer to a connector you deploy into your own Cloudflare account:
+
+```console
+$ govee mcp --new-token            # once: a bearer token, saved in the keychain and printed for the Worker
+$ govee mcp --http --port 8760     # serve on 127.0.0.1 only
+```
+
+The connector, [cli-common's `connector/`](https://github.com/piekstra/cli-common/tree/main/connector#tools-from-your-computer-home-modules),
+reaches that port through a Cloudflare Tunnel in your account; its README walks through the tunnel,
+the VPC service, a launchd agent that keeps the server running, and the `HOME_GOVEE_TOKEN` secret,
+with the threat model. `--http` binds 127.0.0.1 only, refuses to start without the token, and refuses
+any request whose `Host` is not loopback or that carries an `Origin`.
+
+It serves the three reads only. `--allow-writes` adds `govee_power` and `govee_light`, and then
+anyone holding the token can change your lights through your Worker, with no prompt unless the client
+asks for one; leave it off unless you want that. Your Govee key stays on your computer, but tool
+results do not: your device names, rooms and states pass through Cloudflare and reach Claude
+([`SECURITY.md`](SECURITY.md)). While the computer sleeps, the tools answer that it is offline.
+
+After `govee self-update`, restart the server: a running one keeps the old code, and its launchd agent
+restarts it only when it exits. Its start line names the version.
+
+```console
+$ launchctl kickstart -k gui/$(id -u)/com.piekstra.govee-mcp-http
+```
+
+`self-update` does not reach a Claude Desktop extension, which runs its own copy. Install the new
+release's `.mcpb` too.
+
 ## Output
 
 Text is the default: key/value blocks for one resource, pipe tables for

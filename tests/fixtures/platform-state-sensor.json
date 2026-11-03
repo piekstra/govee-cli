@@ -1,0 +1,9 @@
+{
+  "sku": "H5179",
+  "device": "33:44:55:66:77:88:99:AA",
+  "capabilities": [
+    { "type": "devices.capabilities.online", "instance": "online", "state": { "value": false } },
+    { "type": "devices.capabilities.property", "instance": "sensorTemperature", "state": { "value": 68.5 } },
+    { "type": "devices.capabilities.property", "instance": "sensorHumidity", "state": { "value": 41 } }
+  ]
+}

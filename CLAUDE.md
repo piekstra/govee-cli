@@ -13,7 +13,8 @@ Claude Code specifics:
   key against the live API; only run it when the owner asks.
 - **Writes act on a real account.** `rooms move|create|rename|delete` change
   the owner's Govee Home rooms; device control commands change real lights.
-  Don't run them to "test"; the logic is unit-tested against fixtures.
+  Don't run them to "test"; the logic is unit-tested against fixtures. The same goes for
+  `govee_power` and `govee_light`: `tests/mcp_stdio.rs` drives them against a stub.
 - **Secrets:** the API key and the account bearer live in the OS keychain
   (`piekstra.govee`). Never print them, put them on argv, or write them to a
   file. A freshly built binary reading the keychain is a macOS prompt — keep

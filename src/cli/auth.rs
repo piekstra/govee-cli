@@ -23,7 +23,7 @@ pub enum AuthCommand {
     Login(LoginArgs),
     /// Report credential/session state (auth-status/v1).
     Status,
-    /// Clear the account session; --forget also removes the API key and
+    /// Clear the account session; --forget also removes the API key, the connector token and
     /// the config file.
     Logout(LogoutArgs),
     /// Raw keychain write of the API key for rotation / headless setup.
@@ -203,12 +203,24 @@ fn logout(ctx: &Ctx, args: &LogoutArgs) -> Result<(), CliError> {
         if ctx.cfg.api_key_in_keychain {
             ctx.creds.delete(API_KEY_ITEM)?;
         }
+        // Nothing records whether `mcp --new-token` ran, so this read is ungated: a keyring that
+        // is not running, or a prompt declined, must not leave the config behind it.
+        let token = ctx.creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT);
         ctx.store.clear()?;
-        ctx.note("API key removed from the keychain; config cleared");
+        token.map_err(connector_token_stays)?;
+        ctx.note("API key and connector token removed from the keychain; config cleared");
     } else {
-        ctx.note("API key kept (stateless); pass --forget to remove it");
+        ctx.note("API key and connector token kept; pass --forget to remove them");
     }
     Ok(())
+}
+
+/// What a failed token delete still leaves true. Nothing, if `mcp --new-token` never ran here.
+fn connector_token_stays(failure: CliError) -> CliError {
+    CliError::Keychain(format!(
+        "the API key and config are cleared, but the connector token of `govee mcp --http` could \
+         not be removed, if there is one: {failure}"
+    ))
 }
 
 fn set_credential(ctx: &Ctx, args: &SetCredentialArgs) -> Result<(), CliError> {

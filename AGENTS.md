@@ -10,7 +10,8 @@ Guidance for AI coding agents (and humans) working in this repo. Tool-agnostic;
 API** (rooms and the account login: `app2.govee.com`). A thin, Govee-specific
 layer over the shared [`cli-common`](https://github.com/piekstra/cli-common)
 `pk-cli-*` crates (auth shapes, config, secrets, self-update, output, exit
-codes, the confirmation gate, reference resolution). This repo owns only the
+codes, the confirmation gate, reference resolution, mcp), pinned to tag
+**v0.23.0**. This repo owns only the
 two clients, the device models, and the commands.
 
 ## Build, test, lint
@@ -25,7 +26,7 @@ Run `make verify` before considering a change done — it's exactly what CI runs
 
 ## Layout
 
-- `src/lib.rs` — `run`: offline commands first (`config`, `self-update`,
+- `src/lib.rs` — `run`: offline commands first (`config`, `self-update`, `mcp`,
   `completions`, `info`), then the async runtime for everything that talks
   to Govee. `src/main.rs` is `parse` + `output::fail`.
 - `src/cli/mod.rs` — the clap tree (`CommonArgs` + `--config` + the hidden
@@ -92,6 +93,26 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   both are computed from a fresh read *after* the prompt, never from the
   pre-prompt snapshot.
 
+## The MCP tools
+
+`src/mcp.rs` is `govee mcp` (cli-common `DESIGN.md` §1.9). Three tools read; `govee_power` and
+`govee_light` change one device, follow my-q-cli's pattern, and are not read-only. A write names
+one device by its full name or id (`named_device` leaves the resolver's partial match out), is
+refused unless the device's Platform type is in `CONTROLLABLE_TYPES` and its SKU is no group, can
+send only a `Change`, and returns the state read back with `confirmed`, also when the command's own
+answer was lost (`Sent::NoAnswer`). A new argument or tool goes on the lists in
+`src/mcp/tests.rs`, a new request on the list in `tests/mcp_stdio.rs`, and a new tool in
+`packaging/mcpb/manifest.json` and README's table. The definitions stay under 8,000 characters
+together. No tool removes or unpairs a device, changes an account, a schedule, a room or firmware,
+shares access, or reaches `govee api`, whatever the CLI can do.
+
+## Releasing
+
+Bump `version` in `Cargo.toml` and `packaging/mcpb/manifest.json`, add to `CHANGELOG.md`, merge, then
+push the tag `v<version>`. The workflow checks the tag, crate and manifest agree, builds the
+tarballs `self-update` finds and the `.mcpb`, and publishes once all of them are there. A pull request
+that touches the workflow, packaging or dependencies runs everything but the publish as a dry run.
+
 ## Tests
 
 Offline, always. No test may read the OS keychain: `cargo test` produces an
@@ -99,7 +120,9 @@ ad-hoc-signed binary that macOS treats as a new identity, so a credentialed
 command would prompt once per keychain item on every run. The surface tests
 use a nonexistent `GOVEE_CONFIG` (no marker, no username) and unset
 `GOVEE_API_KEY`, so every credentialed command stops at exit 3 before the
-keychain. Two tests reach the network on purpose (`self-update --check`, and
+keychain. `tests/mcp_stdio.rs` runs the real server against a stub of the Platform API on
+127.0.0.1, with the key in the environment and the stub named in `GOVEE_TEST_BASE_URL`, which only
+a debug build reads; no test can reach a real device. Two tests reach the network on purpose (`self-update --check`, and
 `devices list` with a bogus env key) and accept "no network" as a pass.
 Live checks go through the installed binary by hand.
 

@@ -8,6 +8,9 @@ pub struct DeviceInfo {
     pub sku: String,
     pub device: String,
     pub device_name: String,
+    /// The Platform API's device type (`devices.types.light`).
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub device_type: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<Capability>,
 }

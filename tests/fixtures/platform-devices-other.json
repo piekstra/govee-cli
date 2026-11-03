@@ -1,0 +1,97 @@
+[
+  {
+    "sku": "H5083",
+    "device": "44:55:66:77:88:99:AA:BB",
+    "deviceName": "Desk Plug",
+    "type": "devices.types.socket",
+    "capabilities": [
+      {
+        "type": "devices.capabilities.online",
+        "instance": "online",
+        "parameters": {
+          "dataType": "ENUM"
+        }
+      },
+      {
+        "type": "devices.capabilities.on_off",
+        "instance": "powerSwitch",
+        "parameters": {
+          "dataType": "ENUM"
+        }
+      }
+    ]
+  },
+  {
+    "sku": "H7130",
+    "device": "55:66:77:88:99:AA:BB:CC",
+    "deviceName": "Bedroom Heater",
+    "type": "devices.types.heater",
+    "capabilities": [
+      {
+        "type": "devices.capabilities.online",
+        "instance": "online",
+        "parameters": {
+          "dataType": "ENUM"
+        }
+      },
+      {
+        "type": "devices.capabilities.on_off",
+        "instance": "powerSwitch",
+        "parameters": {
+          "dataType": "ENUM"
+        }
+      },
+      {
+        "type": "devices.capabilities.range",
+        "instance": "brightness",
+        "parameters": {
+          "dataType": "INTEGER"
+        }
+      }
+    ]
+  },
+  {
+    "sku": "H5179",
+    "device": "33:44:55:66:77:88:99:AA",
+    "deviceName": "Porch Thermometer",
+    "type": "devices.types.thermometer",
+    "capabilities": [
+      {
+        "type": "devices.capabilities.online",
+        "instance": "online",
+        "parameters": {
+          "dataType": "ENUM"
+        }
+      },
+      {
+        "type": "devices.capabilities.property",
+        "instance": "sensorTemperature",
+        "parameters": {
+          "dataType": "INTEGER"
+        }
+      }
+    ]
+  },
+  {
+    "sku": "BaseGroup",
+    "device": "66:77:88:99:AA:BB:CC:DD",
+    "deviceName": "Downstairs Lights",
+    "type": "devices.types.light",
+    "capabilities": [
+      {
+        "type": "devices.capabilities.on_off",
+        "instance": "powerSwitch",
+        "parameters": {
+          "dataType": "ENUM"
+        }
+      },
+      {
+        "type": "devices.capabilities.range",
+        "instance": "brightness",
+        "parameters": {
+          "dataType": "INTEGER"
+        }
+      }
+    ]
+  }
+]

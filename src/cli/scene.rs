@@ -175,7 +175,7 @@ pub fn extract_scene_names(data: &Value) -> Vec<Value> {
 }
 
 /// Extract scene options only from capabilities matching a specific instance.
-fn extract_scene_names_for_instance(data: &Value, instance: &str) -> Vec<Value> {
+pub(crate) fn extract_scene_names_for_instance(data: &Value, instance: &str) -> Vec<Value> {
     options_of(data, Some(instance))
 }
 

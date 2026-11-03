@@ -1,0 +1,97 @@
+{
+  "manifest_version": "0.3",
+  "name": "govee",
+  "display_name": "Govee (govee)",
+  "version": "0.4.0",
+  "description": "See and control your own Govee lights and plugs, through the open-source govee CLI.",
+  "long_description": "Ask Claude what your Govee devices are, what state they are in and what a sensor reads, and to turn one light or plug on or off or set its brightness, color or scene. Five tools: govee_devices, govee_device_state and govee_scenes read; govee_power and govee_light change one named device, and Claude asks you before each call. No tool can change several devices at once, turn on a heater or other appliance, rearrange rooms, or touch your account. Your key is kept in Claude Desktop's settings and sent only to Govee's API. What the tools return goes to Claude as part of your conversation. Unofficial; not affiliated with or endorsed by Govee.",
+  "author": {
+    "name": "piekstra",
+    "url": "https://github.com/piekstra"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piekstra/govee-cli"
+  },
+  "homepage": "https://github.com/piekstra/govee-cli",
+  "documentation": "https://github.com/piekstra/govee-cli#use-with-claude",
+  "support": "https://github.com/piekstra/govee-cli/issues",
+  "license": "GPL-3.0",
+  "keywords": [
+    "govee",
+    "smart-home",
+    "lights"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/govee",
+    "mcp_config": {
+      "command": "${__dirname}/server/govee",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "GOVEE_API_KEY": "${user_config.api_key}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/govee.exe",
+          "args": [
+            "mcp"
+          ],
+          "env": {
+            "GOVEE_API_KEY": "${user_config.api_key}"
+          }
+        },
+        "linux": {
+          "command": "${__dirname}/server/linux/govee",
+          "args": [
+            "mcp"
+          ],
+          "env": {
+            "GOVEE_API_KEY": "${user_config.api_key}"
+          }
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "govee_devices",
+      "description": "Your devices, their rooms, and what the tools can change on each."
+    },
+    {
+      "name": "govee_device_state",
+      "description": "One device's state: online, power, brightness, color, sensor readings."
+    },
+    {
+      "name": "govee_scenes",
+      "description": "The scenes and saved snapshots one device offers."
+    },
+    {
+      "name": "govee_power",
+      "description": "Turn one light or plug on or off. Claude asks you first."
+    },
+    {
+      "name": "govee_light",
+      "description": "Set one light's brightness, color, color temperature or scene. Claude asks you first."
+    }
+  ],
+  "tools_generated": false,
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "Govee API key",
+      "description": "From the Govee Home app: Profile, Settings, Apply for API Key.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

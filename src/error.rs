@@ -58,7 +58,11 @@ impl From<AppError> for CliError {
                 message,
                 error_code: None,
             } => CliError::Upstream(message),
-            AppError::RateLimited(_) | AppError::Http(_) => CliError::Upstream(e.to_string()),
+            AppError::RateLimited(_) => CliError::Upstream(e.to_string()),
+            // A reqwest error prints the URL it was for, and this text can reach a model.
+            AppError::Http(e) => {
+                CliError::Upstream(format!("no usable answer from Govee: {}", e.without_url()))
+            }
             AppError::UnsupportedOperation(_) | AppError::InvalidInput(_) => {
                 CliError::Usage(e.to_string())
             }
