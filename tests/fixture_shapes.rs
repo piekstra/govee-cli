@@ -116,7 +116,14 @@ fn platform_and_app_views_merge_into_one_device_table() {
 
 #[test]
 fn fixtures_carry_only_dummy_identities() {
-    for name in ["platform-devices.json", "app-device-list.json"] {
+    for name in [
+        "platform-devices.json",
+        "platform-devices-other.json",
+        "platform-state.json",
+        "platform-state-sensor.json",
+        "platform-scenes.json",
+        "app-device-list.json",
+    ] {
         let mut strings = Vec::new();
         collect_strings(&fixture(name), &mut strings);
         for s in strings {

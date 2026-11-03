@@ -23,7 +23,7 @@ pub enum AuthCommand {
     Login(LoginArgs),
     /// Report credential/session state (auth-status/v1).
     Status,
-    /// Clear the account session; --forget also removes the API key and
+    /// Clear the account session; --forget also removes the API key, the connector token and
     /// the config file.
     Logout(LogoutArgs),
     /// Raw keychain write of the API key for rotation / headless setup.
@@ -101,7 +101,7 @@ fn migrate_legacy(ctx: &Ctx) -> Result<legacy::Moved, CliError> {
 }
 
 async fn verify_key(ctx: &Ctx, key: &Secret) -> Result<usize, CliError> {
-    let api = GoveeApi::new(key.expose().to_string(), ctx.verbose)?;
+    let api = GoveeApi::new(key.expose().to_string(), ctx.verbose, ctx.cfg.base_url())?;
     let data = api.get_devices().await?;
     let n = data.as_array().map(|a| a.len()).unwrap_or(0);
     ctx.note(&format!("ok: {n} device(s) visible to this key"));
@@ -203,10 +203,11 @@ fn logout(ctx: &Ctx, args: &LogoutArgs) -> Result<(), CliError> {
         if ctx.cfg.api_key_in_keychain {
             ctx.creds.delete(API_KEY_ITEM)?;
         }
+        ctx.creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT)?;
         ctx.store.clear()?;
-        ctx.note("API key removed from the keychain; config cleared");
+        ctx.note("API key and connector token removed from the keychain; config cleared");
     } else {
-        ctx.note("API key kept (stateless); pass --forget to remove it");
+        ctx.note("API key and connector token kept; pass --forget to remove them");
     }
     Ok(())
 }

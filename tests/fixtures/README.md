@@ -13,6 +13,16 @@ shape rather than against string literals in test code.
   `sku`/`device`/`deviceName`/`groupId` and the `deviceExt.deviceSettings`
   JSON string that decides Wi-Fi vs Bluetooth-only. **Synthetic**, same date.
 
+- `platform-devices-other.json` — the same list's shape for a plug, a heater and
+  a thermometer, the kinds `govee_power` allows and refuses. **Synthetic**,
+  2026-11-03, from the same documentation.
+- `platform-state.json`, `platform-state-sensor.json` — the `payload` of
+  `POST /device/state`, for a light and for an offline sensor. **Synthetic**,
+  2026-11-03, from the same documentation.
+- `platform-scenes.json` — the `payload` of `POST /device/scenes`: its
+  `lightScene` and `snapshot` options. **Synthetic**, 2026-11-03, from the same
+  documentation.
+
 ## Scrubbing policy (enforced by `tests/fixture_shapes.rs`)
 
 Every identity-bearing value must be an obvious dummy:

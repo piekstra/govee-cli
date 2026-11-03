@@ -1,0 +1,28 @@
+{
+  "sku": "H60B0",
+  "device": "AA:BB:CC:DD:EE:FF:00:11",
+  "capabilities": [
+    {
+      "type": "devices.capabilities.dynamic_scene",
+      "instance": "lightScene",
+      "parameters": {
+        "dataType": "ENUM",
+        "options": [
+          { "name": "Sunrise", "value": { "paramId": 1001, "id": 2001 } },
+          { "name": "Sunset", "value": { "paramId": 1002, "id": 2002 } },
+          { "name": "Forest", "value": { "paramId": 1003, "id": 2003 } }
+        ]
+      }
+    },
+    {
+      "type": "devices.capabilities.dynamic_scene",
+      "instance": "snapshot",
+      "parameters": {
+        "dataType": "ENUM",
+        "options": [
+          { "name": "Movie Night", "value": { "paramId": 3001, "id": 4001 } }
+        ]
+      }
+    }
+  ]
+}

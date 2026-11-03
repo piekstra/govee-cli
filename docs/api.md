@@ -76,7 +76,16 @@ Capabilities are discovered per device at run time; a command refuses
 - Group devices (`BaseGroup`, `SameModeGroup` SKUs) appear in the list with
   their own ids and no capabilities of note.
 - A `/device/state` for an offline device answers 200 with stale values; the
-  `online` capability in the same payload says so.
+  `online` capability in the same payload says so. `find_power_state` reads an
+  absent `powerSwitch` as off, which is fine for `power toggle` and not for
+  reporting state: `govee_device_state` leaves it absent instead.
+- A control call's 200 says Govee took the command, not that the device did it.
+  `govee_power` and `govee_light` (`src/mcp.rs`) read `/device/state` about one
+  and three seconds later and report `confirmed` only when it shows the change
+  on a device that is online. They read a zero `colorRgb` or `colorTemperatureK`
+  as no value, and do not use `lightScene`'s state at all, so a scene is never
+  confirmed. Those read-back readings follow the documentation's shapes and have
+  not been checked against a device in a test (2026-11-03).
 
 ## Govee Home app API (private, `src/api/app.rs`)
 

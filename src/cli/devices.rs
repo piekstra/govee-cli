@@ -80,7 +80,7 @@ async fn app_view_or_warn(ctx: &Ctx) -> Option<Vec<AppDevice>> {
     }
 }
 
-fn platform_row(
+pub(crate) fn platform_row(
     info: &crate::models::device_info::DeviceInfo,
     dtype: &crate::models::device_type::DeviceType,
 ) -> PlatformDevice {

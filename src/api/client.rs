@@ -16,6 +16,7 @@ pub struct GoveeApi {
     client: reqwest::Client,
     api_key: String,
     verbose: bool,
+    base: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,8 +58,8 @@ impl ApiResponse {
 
 impl GoveeApi {
     /// `api_key` is the raw key; it is only ever placed in the request
-    /// header and never logged.
-    pub fn new(api_key: String, verbose: bool) -> Result<Self, AppError> {
+    /// header and never logged. `base` is [`crate::config::Config::base_url`].
+    pub fn new(api_key: String, verbose: bool, base: &str) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
             .user_agent(format!("{}/{}", crate::BIN, env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(15))
@@ -67,6 +68,7 @@ impl GoveeApi {
             client,
             api_key,
             verbose,
+            base: base.to_string(),
         })
     }
 
@@ -101,7 +103,7 @@ impl GoveeApi {
     }
 
     async fn post(&self, path: &str, body: Value) -> Result<Value, AppError> {
-        let url = format!("{BASE_URL}{path}");
+        let url = format!("{}{path}", self.base);
         if self.verbose {
             eprintln!("[verbose] POST {url}");
         }
@@ -119,7 +121,7 @@ impl GoveeApi {
 
     /// GET /user/devices — every device on the account with its capabilities.
     pub async fn get_devices(&self) -> Result<Value, AppError> {
-        let url = format!("{BASE_URL}/user/devices");
+        let url = format!("{}/user/devices", self.base);
         if self.verbose {
             eprintln!("[verbose] GET {url}");
         }

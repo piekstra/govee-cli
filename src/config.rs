@@ -19,15 +19,27 @@ pub struct Config {
     /// API-key keychain read. Not user-settable through `config set`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub api_key_in_keychain: bool,
+    /// Where the Platform API is, for a stub in tests. Default
+    /// [`crate::api::client::BASE_URL`]. The API key is sent there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 /// Keys `config set|unset` accept.
-pub const KEYS: &[&str] = &["username"];
+pub const KEYS: &[&str] = &["username", "base_url"];
 
 impl Config {
+    /// The Platform API's base URL.
+    pub fn base_url(&self) -> &str {
+        self.base_url
+            .as_deref()
+            .unwrap_or(crate::api::client::BASE_URL)
+    }
+
     pub fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
         match key {
             "username" => self.username = Some(value.to_string()),
+            "base_url" => self.base_url = Some(value.trim_end_matches('/').to_string()),
             other => return Err(unknown(other)),
         }
         Ok(())
@@ -36,6 +48,7 @@ impl Config {
     pub fn unset(&mut self, key: &str) -> Result<(), String> {
         match key {
             "username" => self.username = None,
+            "base_url" => self.base_url = None,
             other => return Err(unknown(other)),
         }
         Ok(())

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0 — 2026-11-03
+
+- `govee mcp`: tools for Claude. `govee_devices`, `govee_device_state` and `govee_scenes` read;
+  `govee_power` and `govee_light` change one light or plug, named in full, and a client that
+  honors their annotations asks you before each call. Each returns the state read back from Govee
+  and says whether it shows the change. They run over stdio for Claude Code and Claude Desktop, and
+  with `--http` on 127.0.0.1 behind a bearer token for Claude on the web and mobile through your own
+  Cloudflare Worker and tunnel, reads only unless `--allow-writes`. No tool can remove a device,
+  rearrange rooms, change an account, a schedule or firmware, or reach `govee api`.
+- `$GOVEE_API_KEY`, which already came before the keychain, is how the Claude Desktop extension
+  passes its key.
+- Releases are cut by pushing a tag, no longer by merging a version bump. They attach
+  `govee-<version>.mcpb`, a Claude Desktop extension, and a Windows x86_64 tarball, and a release is
+  published only once every asset is there.
+- `self-update` says to restart a running `govee mcp --http` and to install the new `.mcpb`.
+- `auth logout --forget` also removes the connector token, and plain `auth logout` says it keeps it.
+- A failure that got no answer from Govee no longer prints its URL.
+- `config set base_url` points the Platform API client elsewhere, for a stub in tests.
+- cli-common v0.22.0, up from v0.15.1. The minimum Rust version is 1.89.
+
 ## 0.3.1 — 2026-11-03
 
 - `NO_COLOR=1` no longer fails every command with a usage error (exit 2):

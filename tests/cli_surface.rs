@@ -56,6 +56,7 @@ fn every_subcommand_help_renders() {
         vec!["auth", "--help"],
         vec!["auth", "login", "--help"],
         vec!["auth", "status", "--help"],
+        vec!["mcp", "--help"],
         vec!["auth", "logout", "--help"],
         vec!["auth", "set-credential", "--help"],
         vec!["auth", "login-account", "--help"],

@@ -10,6 +10,7 @@ pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod mcp;
 pub mod models;
 pub mod resolve;
 
@@ -28,7 +29,7 @@ pub const REPO: &str = "piekstra/govee-cli";
 
 /// What `info` advertises.
 pub const CAPABILITIES: &[&str] = &[
-    "devices", "power", "light", "scene", "toggle", "segment", "music", "rooms", "api",
+    "devices", "power", "light", "scene", "toggle", "segment", "music", "rooms", "api", "mcp",
 ];
 
 pub fn run(cli: &Cli) -> Result<(), CliError> {
@@ -46,7 +47,24 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
                 target: env!("BUILD_TARGET").into(),
                 current: env!("CARGO_PKG_VERSION").into(),
             }
-            .run(args, cli.common.json, cli.common.quiet)
+            .run_noting(
+                args,
+                cli.common.json,
+                cli.common.quiet,
+                &pk_cli_mcp::restart_note(BIN),
+            )
+        }
+        // Before the config is read, and outside the runtime below: `tools/list` touches no
+        // file or credential, the server runs its own runtime, and each call reads the config
+        // and key as they are then, so a later `auth login` applies to a running server.
+        Commands::Mcp(args) => {
+            return pk_cli_mcp::run(
+                args,
+                mcp::GoveeTools::new(mcp::LiveSource::new(
+                    store,
+                    CredentialStore::for_binary(BIN),
+                )),
+            )
         }
         Commands::Completions { shell } => {
             clap_complete::generate(*shell, &mut Cli::command(), BIN, &mut std::io::stdout());
@@ -105,6 +123,7 @@ async fn dispatch(ctx: &Ctx, command: &Commands) -> Result<(), CliError> {
         }
         Commands::Config(_)
         | Commands::SelfUpdate(_)
+        | Commands::Mcp(_)
         | Commands::Completions { .. }
         | Commands::Info => unreachable!("handled before the runtime starts"),
     }

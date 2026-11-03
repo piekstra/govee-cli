@@ -45,6 +45,7 @@ jobs:
           ./target/release/govee --version
           ./target/release/govee --help > /dev/null
           ./target/release/govee info > /dev/null
+          ./target/release/govee mcp --list-tools > /dev/null
 
   # The only platform-specific sliver is the apple-native keyring backend, so
   # macOS gets a targeted compile + smoke, not a second copy of the whole
@@ -59,6 +60,7 @@ jobs:
           cargo build --release --locked
           ./target/release/govee --version
           ./target/release/govee info > /dev/null
+          ./target/release/govee mcp --list-tools > /dev/null
 
   security:
     runs-on: ubuntu-latest

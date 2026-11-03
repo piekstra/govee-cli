@@ -83,6 +83,13 @@ pub enum Commands {
     Rooms(rooms::RoomsCommand),
     /// Raw Platform API passthrough: `api GET /user/devices`.
     Api(api::ApiCommand),
+    /// Serve Govee tools to Claude over MCP: three reads, and two that change a light or a
+    /// plug, which the client asks you about first (stdio, or --http).
+    ///
+    /// For Claude Code (`claude mcp add govee -- govee mcp`), Claude Desktop and any MCP
+    /// client. With --http, on 127.0.0.1 behind a bearer token, for your own Cloudflare
+    /// Worker (see README), and read-only unless --allow-writes.
+    Mcp(pk_cli_mcp::McpArgs),
     /// Update to the latest release from GitHub.
     SelfUpdate(SelfUpdateArgs),
     /// Print a shell completion script.
@@ -108,7 +115,11 @@ impl Ctx {
     /// A Platform API client, or exit 3 before any network call.
     pub fn api(&self) -> Result<GoveeApi, CliError> {
         let (key, _) = api_key::resolve(&self.cfg, &self.creds)?;
-        Ok(GoveeApi::new(key.expose().to_string(), self.verbose)?)
+        Ok(GoveeApi::new(
+            key.expose().to_string(),
+            self.verbose,
+            self.cfg.base_url(),
+        )?)
     }
 
     /// The app account session if one is configured and stored; `None`
