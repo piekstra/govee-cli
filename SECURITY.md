@@ -21,6 +21,9 @@ environment of any process that sets it accordingly.
 The config file (`~/.config/govee/config.json`) records the account email and
 whether a key is stored; it never contains a secret.
 
+Neither credential follows a redirect off its host, and `govee api` sends the key only over `https`,
+or plain `http` to this machine.
+
 ## The MCP server
 
 `govee mcp` serves five tools to an MCP client (Claude Code, Claude Desktop) over stdio; the

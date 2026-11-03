@@ -127,7 +127,9 @@ govee api POST /device/state --data '{"requestId":"1","payload":{"sku":"H60B0","
 ```
 
 Paths are relative to `https://openapi.api.govee.com/router/api/v1`; the
-response envelope is printed as-is (`api-response/v1`).
+response envelope is printed as-is (`api-response/v1`). A full `https://` URL is also accepted.
+Plain `http://` is refused with exit 2, except to this machine, and the key never follows a redirect
+to another host.
 
 ## Use with Claude
 

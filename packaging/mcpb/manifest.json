@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "govee",
   "display_name": "Govee (govee)",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "See and control your own Govee lights and plugs, through the open-source govee CLI.",
   "long_description": "Ask Claude what your Govee devices are, what state they are in and what a sensor reads, and to turn one light or plug on or off or set its brightness, color or scene. Five tools: govee_devices, govee_device_state and govee_scenes read; govee_power and govee_light change one named device, and Claude asks you before each call. No tool can change several devices at once, turn on a heater or other appliance, rearrange rooms, or touch your account. Your key is kept in Claude Desktop's settings and sent only to Govee's API. What the tools return goes to Claude as part of your conversation. Unofficial; not affiliated with or endorsed by Govee.",
   "author": {

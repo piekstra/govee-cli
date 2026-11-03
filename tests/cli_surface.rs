@@ -393,6 +393,8 @@ fn control_validates_its_arguments_before_any_credential() {
         vec!["music", "set", "Lamp", "Rhythm", "--sensitivity", "101"],
         vec!["api", "PATCH", "/user/devices"],
         vec!["api", "POST", "/device/state", "--data", "{not json"],
+        // The key goes with the request, so never plain http off this machine.
+        vec!["api", "GET", "http://example.com/user/devices"],
     ] {
         let mut full = vec!["--json"];
         full.extend(args.iter());

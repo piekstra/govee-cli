@@ -59,6 +59,8 @@ impl From<AppError> for CliError {
                 error_code: None,
             } => CliError::Upstream(message),
             AppError::RateLimited(_) => CliError::Upstream(e.to_string()),
+            // The shared conversion keeps the policy's reason, which holds no URL.
+            AppError::Http(e) if e.is_redirect() => e.into(),
             // A reqwest error prints the URL it was for, and this text can reach a model.
             AppError::Http(e) => {
                 CliError::Upstream(format!("no usable answer from Govee: {}", e.without_url()))

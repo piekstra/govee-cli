@@ -16,20 +16,26 @@ pub struct ApiCommand {
     pub api: ApiArgs,
 }
 
-/// Method and body are checked before any credential is read.
-pub fn validate(args: &ApiCommand) -> Result<(reqwest::Method, Option<Value>), CliError> {
-    Ok((args.api.parsed_method()?, args.api.parsed_body()?))
+/// A checked request: its method, its body, and a URL the key may travel to.
+pub struct Checked {
+    pub method: reqwest::Method,
+    pub body: Option<Value>,
+    pub url: String,
 }
 
-pub async fn run(
-    ctx: &Ctx,
-    args: &ApiCommand,
-    method: reqwest::Method,
-    body: Option<Value>,
-) -> Result<(), CliError> {
+/// Checked before any credential is read. A full URL may name any `https` host, since the user
+/// chose it, but the key goes with the request, so never plain `http` off this machine.
+pub fn validate(args: &ApiCommand) -> Result<Checked, CliError> {
+    Ok(Checked {
+        method: args.api.parsed_method()?,
+        body: args.api.parsed_body()?,
+        url: args.api.secure_url(BASE_URL)?,
+    })
+}
+
+pub async fn run(ctx: &Ctx, request: Checked) -> Result<(), CliError> {
     let api = ctx.api()?;
-    let url = args.api.url(BASE_URL);
-    let payload = api.raw(method, &url, body).await?;
+    let payload = api.raw(request.method, &request.url, request.body).await?;
     output::emit(ctx.json, "api-response", payload, output::render);
     Ok(())
 }

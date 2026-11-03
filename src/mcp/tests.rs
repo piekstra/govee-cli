@@ -5,7 +5,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use pk_cli_mcp::conformance::{assert_conforms, assert_fits, call, definitions_size};
+use pk_cli_mcp::conformance::{assert_conforms, assert_fits, call, definitions_size, ManualClock};
+use pk_cli_mcp::CALL_LIMIT;
 
 use super::*;
 
@@ -38,11 +39,10 @@ struct Fake {
     scene_reads: Cell<usize>,
     sent: RefCell<Vec<(String, Change)>>,
     paused: RefCell<Vec<Duration>>,
+    clock: ManualClock,
     open_takes: Cell<Duration>,
-    send_deadline: Cell<Option<Duration>>,
     /// How far the wall clock moves during `open`, as a Mac asleep through a prompt.
     slept_in_open: Cell<Duration>,
-    wall_moved: Cell<Duration>,
 }
 
 type Tools = GoveeTools<Rc<Fake>>;
@@ -125,8 +125,8 @@ impl Source for Rc<Fake> {
 
     fn open(&self) -> Result<Rc<Fake>, CliError> {
         self.opened.set(self.opened.get() + 1);
-        std::thread::sleep(self.open_takes.get());
-        self.wall_moved.set(self.slept_in_open.get());
+        self.clock.advance(self.open_takes.get());
+        self.clock.sleep(self.slept_in_open.get());
         if let Some(e) = self.open_fails.borrow_mut().take() {
             return Err(e);
         }
@@ -149,12 +149,8 @@ impl Source for Rc<Fake> {
         self.paused.borrow_mut().push(how_long);
     }
 
-    fn send_deadline(&self) -> Duration {
-        self.send_deadline.get().unwrap_or(SEND_DEADLINE)
-    }
-
-    fn wall_clock(&self) -> SystemTime {
-        SystemTime::now() + self.wall_moved.get()
+    fn clock(&self) -> &dyn Clock {
+        &self.clock
     }
 }
 
@@ -595,13 +591,21 @@ fn power_sends_one_command_to_the_device_named_and_returns_its_state() {
 #[test]
 fn a_call_that_reaches_the_command_past_the_deadline_sends_nothing() {
     let (tools, fake) = home();
-    fake.open_takes.set(Duration::from_millis(20));
-    fake.send_deadline.set(Some(Duration::from_millis(10)));
+    fake.open_takes.set(SEND_DEADLINE);
     let text = failed(&tools, POWER_TOOL, json!({"device": LAMP, "power": "off"}));
-    assert!(text.starts_with("upstream:"), "{text}");
-    assert!(text.contains("nothing was sent"), "{text}");
+    assert!(text.starts_with("other:"), "{text}");
+    assert!(text.contains("was not sent"), "{text}");
     assert!(fake.sent.borrow().is_empty());
     assert_eq!(fake.state_reads.get(), 0);
+}
+
+#[test]
+fn a_call_that_reaches_the_command_just_inside_the_deadline_sends_it() {
+    let (tools, fake) = home();
+    fake.open_takes
+        .set(SEND_DEADLINE - Duration::from_millis(1));
+    ok(&tools, POWER_TOOL, json!({"device": LAMP, "power": "off"}));
+    assert_eq!(fake.sent.borrow().len(), 1);
 }
 
 /// `Instant` stands still while a Mac sleeps, so only the wall clock sees this night pass.
@@ -610,19 +614,8 @@ fn a_mac_that_slept_through_the_prompt_sends_nothing() {
     let (tools, fake) = home();
     fake.slept_in_open.set(Duration::from_secs(8 * 60 * 60));
     let text = failed(&tools, POWER_TOOL, json!({"device": LAMP, "power": "off"}));
-    assert!(text.contains("nothing was sent"), "{text}");
+    assert!(text.contains("was not sent"), "{text}");
     assert!(fake.sent.borrow().is_empty());
-}
-
-#[test]
-fn a_wall_clock_that_moved_back_leaves_the_monotonic_one() {
-    let started = CallStart {
-        monotonic: Instant::now(),
-        wall: SystemTime::now(),
-    };
-    let hour = Duration::from_secs(60 * 60);
-    assert!(started.elapsed(started.wall - hour) < hour);
-    assert!(started.elapsed(started.wall + hour) >= hour);
 }
 
 /// The command and its read-backs, at the client's 15 s each, inside `--http`'s 120 s.
@@ -630,7 +623,7 @@ fn a_wall_clock_that_moved_back_leaves_the_monotonic_one() {
 fn a_write_can_answer_inside_the_http_limit() {
     let per_request = 15;
     let waits: u64 = READ_BACK_WAITS.iter().map(Duration::as_secs).sum();
-    assert!(SEND_DEADLINE.as_secs() + per_request * 3 + waits < 120);
+    assert!(SEND_DEADLINE.as_secs() + per_request * 3 + waits < CALL_LIMIT.as_secs());
     assert!(
         per_request * 2 < SEND_DEADLINE.as_secs(),
         "a list and scenes fit before it"
@@ -1004,6 +997,12 @@ fn a_connection_that_never_opened_is_a_plain_failure() {
     }));
     assert!(matches!(got, Err(CliError::Upstream(_))), "{got:?}");
     assert_eq!(what_became_of(Ok(())).unwrap(), Sent::Accepted);
+    // Govee answered with the redirect and took no command, so this is not "may have worked".
+    let refused = crate::api::redirect_stub::refused_redirect();
+    let text = what_became_of(Err(AppError::Http(refused)))
+        .unwrap_err()
+        .to_string();
+    assert!(text.contains("another host"), "{text}");
 }
 
 // ---- errors ----------------------------------------------------------------------------

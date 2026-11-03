@@ -4,6 +4,7 @@
 //! verification code (status 454 → request a code → log in again with it).
 //! Header set mirrors the iOS app; older `appVersion`s are rejected.
 
+use pk_cli_core::transport::same_host_redirects;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 
@@ -40,6 +41,8 @@ impl GoveeApp {
     pub fn new(client_id: String, verbose: bool) -> Result<Self, AppError> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(20))
+            // A 307 or 308 would re-send the body, and login's body holds the password and code.
+            .redirect(same_host_redirects())
             .build()?;
         Ok(Self {
             client,
@@ -443,4 +446,27 @@ pub fn app_devices(list: &Value) -> Vec<AppDevice> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use crate::api::redirect_stub::{redirect_to_another_host, runtime};
+
+    /// A 307 re-sends the body, and `login`'s holds the password. reqwest strips `Authorization`
+    /// across hosts but never a body.
+    #[test]
+    fn a_login_body_does_not_follow_a_redirect_to_another_host() {
+        let (first, elsewhere) = redirect_to_another_host();
+        let app = GoveeApp::new("dummy-client".into(), false).unwrap();
+        let sent = runtime().block_on(async {
+            app.client
+                .post(&first)
+                .json(&json!({"email": "someone@example.com", "password": "dummy"}))
+                .send()
+                .await
+        });
+        assert!(sent.is_err());
+        assert!(elsewhere.lock().unwrap().is_empty());
+    }
 }
