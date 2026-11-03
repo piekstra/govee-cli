@@ -522,6 +522,19 @@ fn completions_render_for_zsh_and_bash() {
 }
 
 #[test]
+fn no_color_in_the_environment_never_fails_a_command() {
+    // Any non-empty NO_COLOR disables color, per no-color.org; read as a
+    // clap boolean, NO_COLOR=1 was a usage error on every command.
+    for v in ["1", "true", "0", ""] {
+        govee()
+            .env("NO_COLOR", v)
+            .args(["completions", "bash"])
+            .assert()
+            .success();
+    }
+}
+
+#[test]
 fn self_update_check_needs_no_credential() {
     // Reaches GitHub (or fails to, offline): never the keychain, never a
     // Govee credential. Exit 0 (checked) or 5 (no network) are both fine;
