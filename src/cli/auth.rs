@@ -207,8 +207,9 @@ fn logout(ctx: &Ctx, args: &LogoutArgs) -> Result<(), CliError> {
         // is not running, or a prompt declined, must not leave the config behind it.
         let token = ctx.creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT);
         ctx.store.clear()?;
-        token.map_err(connector_token_stays)?;
-        ctx.note("API key and connector token removed from the keychain; config cleared");
+        let token_removed = token.map_err(connector_token_stays)?;
+        ctx.note("API key removed from the keychain; config cleared");
+        ctx.note(&pk_cli_mcp::forget_note(crate::BIN, token_removed));
     } else {
         ctx.note("API key and connector token kept; pass --forget to remove them");
     }
