@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.2 — 2026-11-04
+
+- `auth logout --forget` says what it does not end: a running `govee mcp --http` keeps the token it started with, and one on `$GOVEE_MCP_TOKEN` never had an item to remove.
+- cli-common v0.29.0, up from v0.25.0, which brings the Windows config and self-update fixes.
+
 ## 0.4.1 — 2026-11-03
 
 - **Security fix:** the API key and the account login no longer follow a redirect off their host.
