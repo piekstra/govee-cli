@@ -98,6 +98,6 @@ fn every_platform_runs_mcp_with_the_key_from_a_sensitive_setting() {
     }
     let text = m["long_description"].as_str().unwrap();
     assert!(text.contains("goes to Claude"), "{text}");
-    assert_eq!(m["license"], "GPL-3.0");
+    assert_eq!(m["license"], "AGPL-3.0-only");
     assert!(text.contains("asks you"), "{text}");
 }
