@@ -18,8 +18,8 @@ allow = [
     "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
-# govee-cli itself is GPL-3.0 (Cargo.toml); the allow list is for dependencies.
-exceptions = [{ allow = ["GPL-3.0"], crate = "govee-cli" }]
+# govee-cli itself is AGPL-3.0-only (Cargo.toml); the allow list is for dependencies.
+exceptions = [{ allow = ["AGPL-3.0-only"], crate = "govee-cli" }]
 
 [bans]
 multiple-versions = "warn"
